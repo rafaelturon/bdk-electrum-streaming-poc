@@ -4,7 +4,7 @@ This repository contains a **Proof of Concept** for adding streaming capabilitie
 
 ## 🔭 The Big Picture: Custody Agents
 
-While this PoC focuses on BDK and networking internals, it serves as a critical engineering milestone for my venture, **Custody Agents**.
+While this PoC focuses on BDK and networking internals, it serves as a critical engineering milestone for my venture, **[Custody Agents](https://linkedin.com/company/custodyagents)**.
 
 My long-term roadmap is to build a **Cosigner via Nostr**: a mechanism using decentralized Nostr relays to facilitate encrypted, asynchronous communication of Partially Signed Bitcoin Transactions (PSBTs) between co-signers.
 
@@ -20,8 +20,8 @@ Mastering **Async Rust** and **Streaming Architectures** (via this Electrum impl
 
 This project is part of the **Bitcoin Dev Launchpad**. It represents the "Production Phase" of my study on Bitcoin Wallets.
 
-* **Phase 1 (Private):** Bare-metal wallet implementation (Manual UTXO management, SegWit v0, byte-level transaction construction). *Kept private to respect course integrity.*
-* **Phase 2 (This Repo):** Async networking and integration with the Bitcoin Dev Kit (BDK) ecosystem.
+* **Phase 1 ([Rust Bitcoin Wallet Evolution](https://github.com/rafaelturon/rust-bitcoin-wallet-evolution)):** Bare-metal wallet implementation (Manual UTXO management, SegWit v0, byte-level transaction construction). *Kept private to respect course integrity.*
+* **Phase 2 ([BDK Electrum Streaming Client PoC](JOURNAL.md)):** Async networking and integration with the Bitcoin Dev Kit (BDK) ecosystem.
 
 **Goal:**
 Enable real-time balance updates and transaction notifications for BDK-based wallets by implementing the `blockchain.scripthash.subscribe` method from the Electrum protocol.

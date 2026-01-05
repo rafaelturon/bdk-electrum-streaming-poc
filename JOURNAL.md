@@ -42,9 +42,48 @@ I established strict rules for using AI tools during this project to maximize my
 I'm analyzing the current `bdk_electrum` implementation. It currently relies on **polling** for balance updates, which is inefficient and unsuited for the real-time responsiveness required by a remote signer.
 - **The Goal:** Implement a streaming client using the Electrum `blockchain.scripthash.subscribe` method.
 - **The Challenge:** Bridging the gap between a long-running async stream (receiving notifications) and the BDK wallet's update mechanism.
+- **Sequence Diagram:** An asynchronous 'Push' architecture where a buffered channel acts as a shock absorber, decoupling the high-speed network stream from the local wallet state.
 
+```mermaid
+sequenceDiagram
+    participant User as 👤 User
+    participant Wallet as 🧠 bdk_wallet
+    participant Adapter as 🌉 Adapter (cache)
+    participant Channel as 📬 MPSC Channel
+    participant Stream as ⚡ Streaming Client
+    participant Server as ☁️ Electrum Server
+
+    Note over Wallet, Server: Phase 1: Setup (The Handshake)
+    Wallet->>Adapter: Initialize
+    Adapter->>Channel: Create Channel
+    Adapter->>Stream: Connect & Subscribe
+    Stream->>Server: blockchain.scripthash.subscribe
+    Server-->>Stream: OK (Subscription Active)
+
+    Note over Stream, Server: Phase 2: The Producer (Network)
+    par Bitcoin Network
+        Server->>Server: 💰 New Transaction!
+        Server->>Stream: 🔔 Notification (Push)
+        Stream->>Channel: send(Event)
+        Note right of Channel: Buffers in Queue
+    end
+
+    Note over Adapter, Channel: Phase 3: The Consumer (Background)
+    loop Continuous Processing
+        Channel-->>Adapter: recv()
+        Adapter->>Adapter: Updates Local Cache
+    end
+
+    Note over User, Wallet: Phase 4: Reading (Instant)
+    User->>Wallet: sync()
+    Wallet->>Adapter: Query Balance
+    Adapter-->>Wallet: Responds from Memory
+```
 ### Next Steps
-- [ ] Initialize the project with `bdk` and `electrum-client`.
+- [ ] Initialize the project with `bdk` electrum command line application using its tools:
+   * Core: `bdk_wallet` (Logic), `bdk_chain` (Structures).
+   * Persistence: `bdk_file_store` (To test persistence across sessions).
+   * Network: `bdk_electrum` (The standard client we will eventually wrap/replace).
 - [ ] Write a simple "Hello World" subscription test to validate the async concept.
 
 ---

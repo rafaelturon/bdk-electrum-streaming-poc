@@ -80,10 +80,88 @@ sequenceDiagram
     Adapter-->>Wallet: Responds from Memory
 ```
 ### Next Steps
-- [ ] Initialize the project with `bdk` electrum command line application using its tools:
+- [x] Initialize the project with `bdk` electrum command line application using its tools:
    * Core: `bdk_wallet` (Logic), `bdk_chain` (Structures).
    * Persistence: `bdk_file_store` (To test persistence across sessions).
    * Network: `bdk_electrum` (The standard client we will eventually wrap/replace).
 - [ ] Write a simple "Hello World" subscription test to validate the async concept.
 
 ---
+
+## 📅 2026-01-05 | Day 02: Foundation, Discovery & Strategy
+
+### Objective
+
+My primary goal today is to establish a solid "AS-IS" baseline by building a standard CLI wallet using `bdk` components (v1.0) with the traditional polling method. This creates a **Control Group** to benchmark against.
+
+However, the scope expanded significantly after a deep dive into the BDK ecosystem's history. I uncovered existing experimental work that validates my architectural thesis, shifting my strategy from "inventing from scratch" to "orchestrating and finishing."
+
+### The "Gold Mine" Discovery: `bdk_electrum_streaming`
+
+While researching implementation paths, I discovered an experimental repository by Core Dev **Evan Linjin** [(`bdk_electrum_streaming`)](https://github.com/evanlinjin/experiments/tree/main/bdk_electrum_streaming) that attempts to solve exactly what I am building.
+
+**Key Strategic Insights:**
+
+1. **Validation of Architecture:** The fact that a lead maintainer explored this confirms that **Streaming** is a critical, unsolved need in the BDK ecosystem.
+
+2. **The "Hard Part" is Solved:** The repository contains the complex domain logic required to translate raw Electrum JSON notifications into `bdk_chain` updates.
+* *My Strategy:* I will leverage this domain logic (the "math") but wrap it in my own architectural implementation.
+
+3. **My Value Add (The Architect's Role):** While the experiment focuses on internal BDK mechanics, my contribution will be the **System Architecture**. I will implement a robust `tokio::mpsc` channel topology to decouple the high-speed network stream from the wallet state.
+
+### The "Official Example" Strategy
+I am adjusting my contribution goal to maximize success and community adoption:
+* **The Risk:** Attempting a PR directly into the `bdk_electrum` core crate requires handling every edge case and supporting every async runtime (agnosticism), which is a high barrier to entry.
+* **The Pivot:** I will aim to deliver this as a production-grade **"Official Example"** or a **"Satellite Crate"**.
+* This allows me to be "opinionated" (enforcing `tokio` and `mpsc` for robustness).
+* It provides immediate utility to the community (a "recipe" for high-frequency apps) without getting bogged down in low-level library politics.
+
+### Technical Implementation Plan
+
+#### 1. Project Initialization
+
+I initialized the Rust binary project that will house both the control group and the future streaming implementation.
+
+```bash
+cd bdk-electrum-streaming-poc
+cargo init
+```
+
+#### 2. Dependency Management
+
+I configured `Cargo.toml` to support the modular BDK structure while laying the groundwork for the async implementation.
+
+**Selected Crates:**
+
+* **`bdk_wallet`**: The "Brain". Handles descriptors and UTXO calculation.
+* **`bdk_electrum`**: The "Network".
+* **`bdk_file_store`**: The "Memory". Essential for testing persistence.
+* **`tokio`**: The "Engine". Even for the polling baseline, I am including the full `tokio` runtime to prepare for the transition to the `mpsc` streaming architecture.
+
+```toml
+[package]
+name = "bdk-electrum-streaming-poc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bdk_wallet = { version = "1.0.0-beta.6", features = ["file_store"] } # Check for latest
+bdk_electrum = "0.19.0"
+bdk_file_store = "0.14.0"
+bdk_chain = "0.16.0"
+bitcoin = "0.32.2"
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1.0"
+dotenvy = "0.15"
+log = "0.4"
+env_logger = "0.11"
+
+```
+
+### Next Steps
+
+* [ ] Successfully compile and run the baseline wallet.
+* [ ] Send testnet coins to the generated address.
+* [ ] Confirm that `wallet_db.dat` grows and persists the transaction history.
+* [ ] **Day 03 Goal:** Create the separate `networking` module and implement the `StreamingClient` struct.

@@ -1,17 +1,18 @@
 [package]
 name = "bdk-electrum-streaming-poc"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
-bdk_wallet = { version = "1.0.0-beta.6", features = ["file_store"] } # Check for latest
-bdk_electrum = "0.19.0"
-bdk_file_store = "0.14.0"
-bdk_chain = "0.16.0"
+# BDK dependencies
+bdk_wallet = { version = "2.3", features = ["file_store"] }
+bdk_electrum = "0.23"
+bdk_file_store = "0.22"
+
+# Other dependencies
 bitcoin = "0.32.2"
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1.0"
-dotenvy = "0.15"
 log = "0.4"
 env_logger = "0.11"

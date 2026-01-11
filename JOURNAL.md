@@ -668,3 +668,129 @@ The next phase is to implement:
 This is the only path to **sub-second perceived sync**.
 
 ---
+## 📅 2026-01-12 | Day 06: The Skeleton, The Tracker & Standing on the Shoulders of Giants
+
+### Objective
+
+Yesterday, I mathematically proved that polling is a dead end. Today, I stopped analyzing and started building.
+
+My goal was to lay the **structural foundation** for the streaming client and integrate the critical domain logic required to track Bitcoin scripts.
+
+### 1. Structural Refactor
+
+I reorganized the crate to separate the "Old World" (Polling) from the "New World" (Streaming).
+
+* Moved all baseline logic to `src/polling/`.
+* Created the new `src/streaming/` module tree.
+
+The new architecture follows a strict Actor-like model to decouple network I/O from wallet logic:
+
+* **`adapter`**: The public-facing API (`StreamingSync`).
+* **`engine`**: The internal orchestrator loop.
+* **`electrum`**: The raw network transport (TCP/TLS).
+* **`jobs`**: Isolated logic for tracking chain tip (`chain_job`) and script derivation (`spk_job`).
+
+### 2. The Grand Architecture
+
+I finalized the system design. Instead of a monolithic loop, the system is a pipeline of specific workers.
+
+```mermaid
+sequenceDiagram
+    participant Server as ☁️ Electrum Server
+    participant Client as 🔌 Async Electrum Client
+    participant Router as 🚦 Engine Router
+    participant SpkJob as 📬 SPK Job (Evan Logic)
+    participant Tracker as 🧮 Derived SPK Tracker (Evan Logic)
+    participant Translator as 🔄 Update Translator
+    participant Channel as 📬 MPSC Channel
+    participant Wallet as 🧠 bdk_wallet
+
+    Note over Client, Router: Phase 0 — Connection Established
+
+    Server->>Client: JSON Notification
+    Client->>Router: ElectrumMsg
+    
+    alt ScriptHash Event
+        Router->>SpkJob: on_scripthash_event()
+        SpkJob->>Tracker: calculate_derivations()
+        Tracker-->>SpkJob: New Scripts to Watch
+    end
+
+    SpkJob->>Translator: translate()
+    Translator->>Channel: send(bdk_chain::Update)
+    Channel->>Wallet: apply_update()
+
+```
+
+### 3. The "Vendor" Component: Crediting @evanlinjin
+
+The hardest part of a streaming wallet isn't the networking—it is the **domain logic** of translating dumb Electrum protocol events into smart BIP-32 wallet updates.
+
+Electrum doesn't know about descriptors, gap limits, or derivation indices. It only knows `scripthashes`. Bridging this gap requires complex, deterministic math.
+
+Rather than reinventing this wheel, I have chosen to **vendor** the core logic from the experimental work of **@evanlinjin** (Evan Linjin), a core BDK maintainer.
+
+**The "Evan Components" (`src/streaming/jobs/`):**
+I integrated Evan's `DerivedSpkTracker` and Job logic directly into my architecture. This code is the "Brain" that:
+
+1. **Manages Derivation:** Takes a BDK descriptor and generates the exact script pubkeys to watch.
+2. **Handles Lookahead:** Automatically slides the gap limit window (e.g., scan 20 addresses ahead) as used addresses are discovered.
+3. **Reverse Lookup:** Instantly maps a raw `scripthash` notification back to a specific keychain and index.
+
+By using **@evanlinjin**'s robust implementation for the *math*, I can focus entirely on the *system architecture*—wrapping his synchronous logic inside my asynchronous `tokio` pipeline.
+
+### 4. Implementation Details
+
+I implemented the `DerivedSpkTracker` with a comprehensive test suite (`tests` module) to verify that the lookahead window slides correctly when a script is marked as used.
+
+**Key Logic (Adapted from @evanlinjin):**
+
+```rust
+pub fn insert_descriptor(
+    &mut self,
+    keychain: K,
+    descriptor: Descriptor<DescriptorPublicKey>,
+    next_index: u32,
+) -> Vec<ScriptBuf> {
+    // 1. Store descriptor
+    // 2. Clear old scripts if descriptor changed
+    // 3. Derive range: [next_index .. next_index + lookahead]
+    // 4. Return new scripts to subscribe to
+}
+
+```
+
+### 5. Unit Testing & Verification
+
+Before proceeding to the network layer, I rigorously verified the "Brain" (Tracker) logic. Since this component manages the gap limit window, any bug here would cause the wallet to "blindly" miss transactions.
+
+I implemented and passed 5 critical unit tests covering the derivation lifecycle:
+
+```text
+running 5 tests
+test streaming::jobs::spk_tracker::tests::insert_descriptor_derives_initial_range ... ok
+test streaming::jobs::spk_tracker::tests::reverse_lookup_works ... ok
+test streaming::jobs::spk_tracker::tests::reinserting_same_descriptor_is_noop ... ok
+test streaming::jobs::spk_tracker::tests::changing_descriptor_clears_old_scripts ... ok
+test streaming::jobs::spk_tracker::tests::lookahead_respected ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+```
+
+**What is verified:**
+
+* **Initial Range:** Inserting a descriptor correctly generates the first 20 scripts (0–19).
+* **Reverse Lookup:** We can map a raw `Script` back to `(Keychain::External, Index: 5)`.
+* **Lookahead Sliding:** When index 5 is used, the tracker correctly derives index 25 to maintain the gap limit.
+* **Descriptor Updates:** Changing the descriptor invalidates old scripts and generates new ones cleanly.
+
+### Next Steps
+
+Now that the "Brain" (Tracker) exists and is verified, I need to build the "Eyes" (Network Client).
+
+1. Implement `AsyncElectrumClient` using `tokio::net`.
+2. Implement the JSON-RPC framing (handling partial chunks).
+3. Wire up the handshake (`server.version` + `server.banner`).
+
+The skeleton is alive. Now we give it connectivity.

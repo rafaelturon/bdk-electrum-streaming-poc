@@ -8,7 +8,7 @@ use bdk_wallet::{
 use bdk_wallet::file_store::Store;
 
 pub mod polling;
-pub mod streaming; // future
+pub mod streaming;
 
 pub const DB_PATH: &str = "wallet_db.dat";
 pub const DB_MAGIC: &[u8] = b"bdk_wallet_magic_bytes";

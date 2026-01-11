@@ -7,6 +7,9 @@ use bdk_wallet::{
 };
 use bdk_wallet::file_store::Store;
 
+pub mod polling;
+pub mod streaming; // future
+
 pub const DB_PATH: &str = "wallet_db.dat";
 pub const DB_MAGIC: &[u8] = b"bdk_wallet_magic_bytes";
 
@@ -27,14 +30,14 @@ pub fn setup_wallet(
 
     let wallet = match wallet_opt {
         Some(wallet) => {
-            println!("Wallet loaded from persistence.");
+            println!("[LIBR] Wallet loaded from persistence.");
             wallet
         }
         None => {
-            println!("Creating new wallet...");
+            println!("[LIBR] Creating new wallet...");
             let change_desc = change_descriptor
                 .clone()
-                .expect("Change descriptor required for new wallet");
+                .expect("[LIBR] Change descriptor required for new wallet");
 
             Wallet::create(descriptor, change_desc)
                 .network(network)

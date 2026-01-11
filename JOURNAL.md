@@ -794,3 +794,97 @@ Now that the "Brain" (Tracker) exists and is verified, I need to build the "Eyes
 3. Wire up the handshake (`server.version` + `server.banner`).
 
 The skeleton is alive. Now we give it connectivity.
+
+---
+
+## 📅 2026-01-13 | Day 07: The Deterministic Engine
+
+### Objective
+
+Today's mission was to build the "Brain" of the streaming architecture.
+
+While `tokio` handles the chaos of the network, I need a component that is **boring, deterministic, and synchronous**. It should take `Events` (e.g., "Connected", "ScriptHashChanged") and emit `Commands` (e.g., "Subscribe", "FetchHistory").
+
+This component is the `StreamingEngine`.
+
+### 1. The Pure State Machine (`src/streaming/engine.rs`)
+
+I implemented the `StreamingEngine` as a pure state machine. It has **no async**, **no network I/O**, and **no side effects**. This makes it infinitely testable.
+
+**Key Responsibilities:**
+
+* **Subscription Management:** Decides which scripts to watch based on the tracker state.
+* **Gap Limit Logic:** Detects when a script transitions from `Empty → Used` and triggers the derivation of new scripts.
+* **Deduplication:** Prevents redundant subscription requests.
+
+### 2. Event-Driven Logic
+
+The engine loop is simple:
+`handle_event(Event) -> Vec<Command>`
+
+Implemented handlers:
+
+* `on_connected()`: Iterates the `spk_tracker` and emits `Subscribe` commands for the entire initial range.
+* `on_scripthash_changed(hash)`: Emits a `FetchHistory(hash)` command to see *what* changed.
+* `on_scripthash_history(hash, txs)`:
+* Updates internal history cache.
+* Checks if the script was previously empty.
+* If `Empty → Used`: Calls `tracker.mark_used_and_derive_new()` and emits `Subscribe` for the new lookahead scripts.
+
+
+### 3. Refactoring the Tracker (`src/streaming/jobs/spk_tracker.rs`)
+
+I realized that Electrum only cares about `sha256` script hashes, not the full `ScriptBuf`.
+I refactored the `DerivedSpkTracker` to internally store and return `sha256::Hash` instead of `ScriptBuf`.
+
+**Changes:**
+
+* `derived_spks` now maps `(Key, Index) -> Hash`.
+* `mark_used_and_derive_new` returns `Vec<Hash>` ready for the network wire.
+* **Optimization:** `clone()` on a 32-byte hash is much cheaper than on a variable-length `Script`.
+
+### 4. Verification (Unit Tests)
+
+I wrote a comprehensive test suite for the Engine (`src/streaming/engine/tests.rs`):
+
+* `connected_subscribes_all_spks`: Verifies that connecting triggers subscriptions for the initial gap limit range (e.g., 0-19).
+* `history_transition_derives_more`: Simulates a "used" script event and asserts that the engine emits `Subscribe` commands for new addresses.
+* `no_duplicate_subscriptions`: Ensures idempotency if we reconnect.
+
+```text
+running 8 tests
+test streaming::engine::tests::connected_subscribes_all_spks ... ok
+test streaming::jobs::spk_tracker::tests::reinserting_same_descriptor_is_noop ... ok
+test streaming::engine::tests::no_duplicate_subscriptions ... ok
+test streaming::jobs::spk_tracker::tests::insert_descriptor_derives_initial_range ... ok
+test streaming::jobs::spk_tracker::tests::reverse_lookup_works ... ok
+test streaming::jobs::spk_tracker::tests::changing_descriptor_clears_old_scripts ... ok
+test streaming::jobs::spk_tracker::tests::lookahead_respected ... ok
+test streaming::engine::tests::history_transition_derives_more ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+### Architecture Diagram
+
+```mermaid
+stateDiagram-v2
+    [*] --> Disconnected
+    Disconnected --> Connected : Connected Event
+    
+    state Connected {
+        [*] --> Idle
+        Idle --> Fetching : ScriptHash Changed
+        Fetching --> Deriving : History Event
+        Deriving --> Idle : Used (Subscribe)
+        Deriving --> Idle : Not Used (NoOp)
+    }
+```
+
+### Next Steps
+
+The "Brain" is built and tested. Now I need to build the "Nervous System" (The Async Client) to feed it real events from the network.
+
+1. Implement `AsyncElectrumClient` (TCP/TLS).
+2. Wire the `mpsc` channels to the Engine.
+3. Start the integration test against `testnet`.

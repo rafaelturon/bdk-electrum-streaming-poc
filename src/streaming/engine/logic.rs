@@ -1,0 +1,61 @@
+use bitcoin::hashes::sha256;
+
+use crate::streaming::engine::state::EngineState;
+use crate::streaming::types::EngineCommand;
+
+pub fn on_connected<K: Ord + Clone>(state: &mut EngineState<K>) -> Vec<EngineCommand> {
+    state.connected = true;
+
+    let mut cmds = Vec::new();
+
+    for &h in state.spk_tracker.all_spk_hashes() {
+        // Build reverse index once
+        if let Some((kc, idx)) = state.spk_tracker.index_of_spk_hash(&h) {
+            state.spk_index_by_hash.insert(h, (kc, idx));
+        }
+
+        if state.subscribed.insert(h) {
+            cmds.push(EngineCommand::Subscribe(h));
+        }
+    }
+
+    cmds
+}
+
+pub fn on_scripthash_changed<K>(_: &mut EngineState<K>, hash: sha256::Hash) -> Vec<EngineCommand> {
+    vec![EngineCommand::FetchHistory(hash)]
+}
+
+pub fn on_scripthash_history<K: Ord + Clone>(
+    state: &mut EngineState<K>,
+    hash: sha256::Hash,
+    txs: Vec<bitcoin::Txid>,
+) -> Vec<EngineCommand> {
+    let mut cmds = Vec::new();
+
+    let prev = state.histories.get(&hash);
+    let was_empty = prev.map(|v| v.is_empty()).unwrap_or(true);
+    let is_empty = txs.is_empty();
+
+    state.histories.insert(hash, txs);
+
+    if was_empty && !is_empty {
+        if let Some((keychain, index)) = state.spk_index_by_hash.get(&hash).cloned() {
+            let newly_derived = state
+                .spk_tracker
+                .mark_used_and_derive_new(&keychain, index);
+
+            for new_hash in newly_derived {
+                if let Some((kc, idx)) = state.spk_tracker.index_of_spk_hash(&new_hash) {
+                    state.spk_index_by_hash.insert(new_hash, (kc, idx));
+                }
+
+                if state.subscribed.insert(new_hash) {
+                    cmds.push(EngineCommand::Subscribe(new_hash));
+                }
+            }
+        }
+    }
+
+    cmds
+}

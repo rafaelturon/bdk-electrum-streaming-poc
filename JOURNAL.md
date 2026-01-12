@@ -888,3 +888,84 @@ The "Brain" is built and tested. Now I need to build the "Nervous System" (The A
 1. Implement `AsyncElectrumClient` (TCP/TLS).
 2. Wire the `mpsc` channels to the Engine.
 3. Start the integration test against `testnet`.
+
+
+
+Based on the provided changeset, here is the journal entry and git commit message for Day 08.
+
+---
+
+## 📅 2026-01-14 | Day 08: Refactoring the Brain & Structural Hygiene
+
+### Objective
+
+Yesterday, I built the "Brain" (`StreamingEngine`) as a single file. It worked, but as I prepared to wire it to the async network client, I realized it was already becoming a "God Struct."
+
+To keep the architecture clean and testable, I decided to refactor the Engine into distinct components **before** adding complexity.
+
+### Structural Refactor: State vs. Logic
+
+I split `src/streaming/engine.rs` into a modular directory `src/streaming/engine/`:
+
+1. **`state.rs`**: Holds the purely passive data structures.
+* `spk_tracker`: The derivation logic.
+* `histories`: The cache of known transactions.
+* `subscribed`: The set of active subscriptions.
+
+
+2. **`logic.rs`**: Contains the **pure functions** that drive transitions.
+* `on_connected(state) -> commands`
+* `on_scripthash_history(state, ...) -> commands`
+
+
+3. **`mod.rs`**: The public facade that wraps the state and exposes the simple `handle_event` API.
+
+This pattern (State + Logic functions) makes unit testing even easier because the logic functions are now isolated from the struct lifecycle.
+
+### Optimization: Zero-Copy Iteration
+
+While refactoring, I noticed a small inefficiency in the `DerivedSpkTracker`.
+The method `all_spk_hashes()` was cloning the 32-byte `sha256::Hash` for every item in the iterator.
+
+```rust
+// Before (Clones every hash)
+pub fn all_spk_hashes(&self) -> impl Iterator<Item = sha256::Hash> + '_
+
+// After (Yields references)
+pub fn all_spk_hashes(&self) -> impl Iterator<Item = &sha256::Hash>
+
+```
+
+In a wallet tracking thousands of addresses, avoiding thousands of unnecessary 32-byte copies per connect event is a valid optimization.
+
+### updated Architecture
+
+The "Brain" is now modular.
+
+```mermaid
+classDiagram
+    class StreamingEngine {
+        +handle_event(Event)
+        -state: EngineState
+    }
+    class EngineState {
+        +spk_tracker
+        +histories
+        +subscribed
+    }
+    class Logic {
+        <<functions>>
+        +on_connected()
+        +on_history()
+    }
+    StreamingEngine --> EngineState
+    StreamingEngine ..> Logic : calls
+
+```
+
+### Next Steps
+
+The refactor is complete and tests still pass. The Engine is robust.
+Now, I proceed to the **Async Client**.
+
+---

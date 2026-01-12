@@ -32,9 +32,9 @@ impl<K: Ord + Clone> DerivedSpkTracker<K> {
         }
     }
 
-    /// Iterate all currently tracked script hashes.
-    pub fn all_spk_hashes(&self) -> impl Iterator<Item = sha256::Hash> + '_ {
-        self.derived_spks.values().cloned()
+    /// Iterate all currently tracked scripthashes.
+    pub fn all_spk_hashes(&self) -> impl Iterator<Item = &sha256::Hash> {
+        self.derived_spks.values()
     }
 
     /// Reverse lookup: given a scripthash, return (keychain, index)

@@ -168,7 +168,7 @@ env_logger = "0.11"
 
 ---
 
-## 📅 2026-01-08 | Day 03: The Control Group & Performance Baseline
+## 📅 2026-01-07 | Day 03: The Control Group & Performance Baseline
 
 ### Objective
 
@@ -271,7 +271,7 @@ This validates the business case for the Streaming implementation. My goal for t
 
 
 ---
-## 📅 2026-01-10 | Day 04: Real-World Sync Costs, Network Friction & The UX Tax
+## 📅 2026-01-08 | Day 04: Real-World Sync Costs, Network Friction & The UX Tax
 
 ### Objective
 
@@ -434,7 +434,7 @@ This was the first time I felt the cost of protocol design in wall-clock time. T
 
 ---
 
-## 📅 2026-01-11 | Day 05: Cold vs Warm Sync, Instrumentation & The Final Nail in Polling
+## 📅 2026-01-09 | Day 05: Cold vs Warm Sync, Instrumentation & The Final Nail in Polling
 
 ### Objective
 
@@ -668,7 +668,7 @@ The next phase is to implement:
 This is the only path to **sub-second perceived sync**.
 
 ---
-## 📅 2026-01-12 | Day 06: The Skeleton, The Tracker & Standing on the Shoulders of Giants
+## 📅 2026-01-10 | Day 06: The Skeleton, The Tracker & Standing on the Shoulders of Giants
 
 ### Objective
 
@@ -797,7 +797,7 @@ The skeleton is alive. Now we give it connectivity.
 
 ---
 
-## 📅 2026-01-13 | Day 07: The Deterministic Engine
+## 📅 2026-01-11 | Day 07: The Deterministic Engine
 
 ### Objective
 
@@ -895,7 +895,7 @@ Based on the provided changeset, here is the journal entry and git commit messag
 
 ---
 
-## 📅 2026-01-14 | Day 08: Refactoring the Brain & Structural Hygiene
+## 📅 2026-01-12 | Day 08: Refactoring the Brain & Structural Hygiene
 
 ### Objective
 

@@ -1043,3 +1043,67 @@ The system is built. Now it needs to be proven.
 I will implement a **`MockElectrumClient`** to write a full end-to-end integration test of the Driver loop before attempting a connection to the real Bitcoin testnet.
 
 ---
+## 📅 2026-01-14 | Day 10: The End-to-End Proof
+
+### Objective
+
+The core components (Tracker, Engine, Driver) were built in isolation. Today's goal was to prove they work together as a cohesive system **without** touching the messy internet.
+
+I needed to build a `MockElectrumClient` and write an integration test that simulates the entire lifecycle of a wallet sync:
+
+1. Connect.
+2. Subscribe to initial addresses.
+3. Receive a transaction notification.
+4. Automatically derive and subscribe to *new* addresses (gap limit).
+
+### 1. The Mock Client (`src/streaming/electrum/mock_client.rs`)
+
+I implemented the `ElectrumApi` trait with a purely in-memory struct.
+
+* **State:** Holds a `HashMap` of transaction histories and a `VecDeque` of pending notifications.
+* **Behavior:** When `poll_scripthash_changed` is called, it pops from the queue, simulating a network push.
+* **Test Helpers:** added `push_tx(hash, txid)` to inject fake transactions into the simulation.
+
+### 2. The Integration Test (`src/streaming/electrum/tests.rs`)
+
+This orchestrates the entire stack:
+
+```rust
+#[test]
+fn end_to_end_derives_and_subscribes_more() {
+    // 1. Setup Tracker + Engine + Mock + Driver
+    // 2. Connect (Driver -> Engine -> Subscribe Initial)
+    // 3. Simulate usage (Mock.push_tx)
+    // 4. Tick Driver (Poll -> Engine -> Fetch History -> Engine -> Derive New -> Subscribe New)
+    
+    // Assert: Subscription count INCREASED automatically
+    assert!(after_hashes.len() > initial_hashes.len());
+}
+
+```
+
+### 3. The Result
+
+The test passed immediately.
+This confirms that my architecture correctly handles the complex "reactive" loop of Bitcoin wallets:
+
+* **Action:** User receives money on address #19.
+* **Reaction:** Wallet automatically watches address #20..#39.
+
+### 4. Architectural Validation
+
+I have achieved a clean separation of concerns:
+
+* **Engine:** Pure state machine (Deterministic).
+* **Tracker:** Pure derivation logic (Deterministic).
+* **Driver:** Side-effect orchestrator (The Loop).
+* **Client:** Pluggable transport (Mockable).
+
+### Next Steps
+
+With the logic mathematically proven by tests, I can now safely implement the **Real Network Client**.
+
+* I will implement `BlockingElectrumClient` first to see it work against Testnet.
+* Then I will refactor to `AsyncElectrumClient` for production performance.
+
+---

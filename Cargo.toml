@@ -11,6 +11,7 @@ bdk_file_store = "0.22"
 
 # Other dependencies
 bitcoin = "0.32.2"
+electrum-client = "0.21"
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1.0"

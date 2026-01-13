@@ -14,14 +14,17 @@ mod logic;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{HashMap, BTreeSet};
+pub use crate::streaming::types::{EngineEvent, EngineCommand};
+
+use std::collections::{BTreeSet, HashMap};
+
+use bitcoin::{ScriptBuf};
+use bitcoin::hashes::sha256;
 
 use crate::streaming::jobs::spk_tracker::DerivedSpkTracker;
 
-// Re-export canonical types from streaming/types.rs
-pub use crate::streaming::types::{EngineEvent, EngineCommand};
-
 use state::EngineState;
+use logic::*;
 
 #[derive(Debug)]
 pub struct StreamingEngine<K> {
@@ -34,6 +37,7 @@ impl<K: Ord + Clone> StreamingEngine<K> {
             state: EngineState {
                 spk_tracker,
                 spk_index_by_hash: HashMap::new(),
+                script_by_hash: HashMap::new(),
                 subscribed: BTreeSet::new(),
                 histories: HashMap::new(),
                 connected: false,
@@ -41,30 +45,17 @@ impl<K: Ord + Clone> StreamingEngine<K> {
         }
     }
 
-    /// Main entrypoint: feed event, get commands
     pub fn handle_event(&mut self, event: EngineEvent) -> Vec<EngineCommand> {
         match event {
-            EngineEvent::Connected => logic::on_connected(&mut self.state),
-
-            EngineEvent::ScriptHashChanged(hash) => {
-                logic::on_scripthash_changed(&mut self.state, hash)
-            }
-
+            EngineEvent::Connected => on_connected(&mut self.state),
+            EngineEvent::ScriptHashChanged(h) => on_scripthash_changed(&mut self.state, h),
             EngineEvent::ScriptHashHistory { hash, txs } => {
-                logic::on_scripthash_history(&mut self.state, hash, txs)
+                on_scripthash_history(&mut self.state, hash, txs)
             }
         }
     }
 
-    // ================================
-    // Introspection helpers (for tests)
-    // ================================
-
-    pub fn is_subscribed(&self, hash: &bitcoin::hashes::sha256::Hash) -> bool {
-        self.state.subscribed.contains(hash)
-    }
-
-    pub fn subscription_count(&self) -> usize {
-        self.state.subscribed.len()
+    pub fn script_for_hash(&self, hash: &sha256::Hash) -> Option<ScriptBuf> {
+        self.state.script_by_hash.get(hash).cloned()
     }
 }

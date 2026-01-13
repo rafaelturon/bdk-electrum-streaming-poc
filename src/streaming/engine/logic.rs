@@ -8,14 +8,14 @@ pub fn on_connected<K: Ord + Clone>(state: &mut EngineState<K>) -> Vec<EngineCom
 
     let mut cmds = Vec::new();
 
-    for &h in state.spk_tracker.all_spk_hashes() {
-        // Build reverse index once
-        if let Some((kc, idx)) = state.spk_tracker.index_of_spk_hash(&h) {
-            state.spk_index_by_hash.insert(h, (kc, idx));
+    for (hash, script) in state.spk_tracker.all_spks() {
+        if let Some((kc, idx)) = state.spk_tracker.index_of_spk_hash(hash) {
+            state.spk_index_by_hash.insert(*hash, (kc, idx));
+            state.script_by_hash.insert(*hash, script.clone());
         }
 
-        if state.subscribed.insert(h) {
-            cmds.push(EngineCommand::Subscribe(h));
+        if state.subscribed.insert(*hash) {
+            cmds.push(EngineCommand::Subscribe(*hash));
         }
     }
 
@@ -41,14 +41,13 @@ pub fn on_scripthash_history<K: Ord + Clone>(
 
     if was_empty && !is_empty {
         if let Some((keychain, index)) = state.spk_index_by_hash.get(&hash).cloned() {
-            let newly_derived = state
+            let newly = state
                 .spk_tracker
                 .mark_used_and_derive_new(&keychain, index);
 
-            for new_hash in newly_derived {
-                if let Some((kc, idx)) = state.spk_tracker.index_of_spk_hash(&new_hash) {
-                    state.spk_index_by_hash.insert(new_hash, (kc, idx));
-                }
+            for (new_hash, new_script) in newly {
+                state.spk_index_by_hash.insert(new_hash, (keychain.clone(), index + 1));
+                state.script_by_hash.insert(new_hash, new_script.clone());
 
                 if state.subscribed.insert(new_hash) {
                     cmds.push(EngineCommand::Subscribe(new_hash));

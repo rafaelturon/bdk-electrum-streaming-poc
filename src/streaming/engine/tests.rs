@@ -35,7 +35,7 @@ fn connected_subscribes_all_spks() {
     let cmds = engine.handle_event(EngineEvent::Connected);
 
     // next_index = 0, lookahead = 2
-    // Derived range = 0..=3 => 4 spks
+    // Derived range = 0..=2 => 3 spks
     assert_eq!(cmds.len(), 3);
 
     for cmd in cmds {
@@ -99,4 +99,31 @@ fn no_duplicate_subscriptions() {
     // Second connect should not resubscribe
     let cmds2 = engine.handle_event(EngineEvent::Connected);
     assert_eq!(cmds2.len(), 0);
+}
+
+#[test]
+fn engine_never_duplicates_subscriptions() {
+    let mut engine = setup_engine(2, 0);
+
+    let cmds = engine.handle_event(EngineEvent::Connected);
+
+    let first = match &cmds[0] {
+        EngineCommand::Subscribe(h) => h.clone(),
+        _ => unreachable!(),
+    };
+
+    // Trigger derivation
+    engine.handle_event(EngineEvent::ScriptHashHistory {
+        hash: first.clone(),
+        txs: vec![fake_txid()],
+    });
+
+    // Trigger again with same history
+    let cmds = engine.handle_event(EngineEvent::ScriptHashHistory {
+        hash: first,
+        txs: vec![fake_txid()],
+    });
+
+    // Should NOT emit new subscriptions
+    assert!(cmds.is_empty());
 }

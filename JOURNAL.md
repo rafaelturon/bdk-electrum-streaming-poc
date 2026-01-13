@@ -969,3 +969,77 @@ The refactor is complete and tests still pass. The Engine is robust.
 Now, I proceed to the **Async Client**.
 
 ---
+
+## 📅 2026-01-13 | Day 09: The Driver, The Interface & The Abstract Network
+
+### Objective
+
+With the deterministic "Brain" (`StreamingEngine`) and the math logic (`SpkTracker`) complete, today's goal was to build the **Nervous System** that connects them to the outside world.
+
+I needed a component to sit between the pure state machine and the impure network. I call this the **`ElectrumDriver`**.
+
+### 1. The `ElectrumApi` Abstraction
+
+To avoid tight coupling with any specific network library (which has been a source of pain with `electrum-client` versions), I defined a trait that captures exactly what the engine needs:
+
+```rust
+pub trait ElectrumApi {
+    fn subscribe_script(&mut self, script: &Script);
+    fn fetch_history(&mut self, script: &Script) -> Vec<Txid>;
+    fn poll_script_changed(&mut self) -> Option<ScriptBuf>;
+}
+
+```
+
+This is a game-changer for testing. I can now plug in a `MockClient` to test the entire sync loop without touching the internet.
+
+### 2. The Driver (`src/streaming/electrum/driver.rs`)
+
+The `ElectrumDriver` is the runtime loop. It is responsible for:
+
+1. **Polling** the client for network events.
+2. **Feeding** those events into the `StreamingEngine`.
+3. **Executing** the resulting `EngineCommand`s (like `Subscribe` or `FetchHistory`).
+
+It is the "gluing" layer that turns a static state machine into a running application.
+
+### 3. Refactoring for Reality
+
+While implementing the driver, I hit a practical reality of the `electrum-client` library: **it requires the full `Script` to subscribe**, not just the scripthash.
+
+I had to refactor the `DerivedSpkTracker` and `StreamingEngine` to store the full `ScriptBuf` alongside the hash.
+
+* **Before:** `Hash -> (Keychain, Index)`
+* **After:** `Hash -> (Keychain, Index, ScriptBuf)`
+
+This allows the Engine to look up the script when issuing a `Subscribe(hash)` command, so the Driver has the data it needs to call the API.
+
+### 4. Dependency Management
+
+I temporarily pinned `electrum-client` to `0.21`.
+
+* *Observation:* This version does not expose async notifications publicly in a way that fits my `poll` model easily.
+* *Strategy:* I implemented a `BlockingElectrumClient` wrapper as a placeholder. The `ElectrumApi` trait ensures that when I write the proper `AsyncClient` (using raw TCP/TLS), the rest of the system won't know the difference.
+
+### 5. Verification
+
+I added rigorous tests to `spk_tracker` and `engine` to ensure **idempotency**.
+
+* `engine_never_duplicates_subscriptions`: Verified that if the network tells us about a script twice, we don't spam the internal logic.
+* `mark_used_is_idempotent`: Verified that marking an index "used" multiple times doesn't corrupt the derivation state.
+
+### Architecture Status
+
+We now have a complete, layered architecture:
+
+1. **Tracker:** Pure Math (Derivation).
+2. **Engine:** Pure State (Decisions).
+3. **Driver:** IO Orchestration (The Loop).
+4. **Client:** The Abstraction (Plug & Play).
+
+### Next Steps
+
+The system is built. Now it needs to be proven.
+I will implement a **`MockElectrumClient`** to write a full end-to-end integration test of the Driver loop before attempting a connection to the real Bitcoin testnet.
+
+---

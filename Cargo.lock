@@ -133,9 +133,10 @@ dependencies = [
  "bdk_wallet",
  "bitcoin",
  "clap",
- "electrum-client 0.21.0",
  "env_logger",
  "log",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
@@ -169,7 +170,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b59a3f7fbe678874fa34354097644a171276e02a49934c13b3d61c54610ddf39"
 dependencies = [
  "bdk_core",
- "electrum-client 0.24.1",
+ "electrum-client",
 ]
 
 [[package]]
@@ -375,23 +376,6 @@ name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
-
-[[package]]
-name = "electrum-client"
-version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a0bd443023f9f5c4b7153053721939accc7113cbdf810a024434eed454b3db1"
-dependencies = [
- "bitcoin",
- "byteorder",
- "libc",
- "log",
- "rustls",
- "serde",
- "serde_json",
- "webpki-roots",
- "winapi",
-]
 
 [[package]]
 name = "electrum-client"

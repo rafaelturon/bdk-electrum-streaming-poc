@@ -1107,3 +1107,90 @@ With the logic mathematically proven by tests, I can now safely implement the **
 * Then I will refactor to `AsyncElectrumClient` for production performance.
 
 ---
+
+## 📅 2026-01-15 | Day 11: The Hybrid Client & Instant Resume
+
+### Objective
+
+We have the "Brain" (Engine) and the "Nerves" (Driver). Today's goal was to build a **Real Network Client** that connects to the actual Bitcoin network.
+
+However, I didn't want a naive implementation that re-downloads history on every restart (which would bring us back to the "Warm Sync" latency problem of Day 05). I wanted to prove **Instant Resume**.
+
+I implemented the **`CachedPollingElectrumClient`**.
+
+### 1. The Hybrid Strategy
+
+This client is a "bridge" between the blocking `electrum-client` library and our streaming architecture.
+
+* **Network Layer:** It uses the standard blocking client.
+* **Polling Strategy:** Instead of downloading history blindly, it calls `script_subscribe` (which returns a lightweight status hash).
+* **Persistence:** It saves transaction history to `electrum-cache.json` using `serde_json`.
+
+### 2. Achieving "Instant Resume"
+
+The magic happens in the `register_script` implementation.
+
+When the Engine starts up and asks to subscribe to the initial gap limit (e.g., 20 addresses):
+
+1. The Client checks its local JSON cache.
+2. **If history exists:** It *immediately* pushes the hash to the `pending` queue.
+3. The Driver picks this up instantly and feeds it back to the Engine.
+4. The Engine sees the history, marks the index used, and derives more addresses.
+
+This happens in **milliseconds**, with **zero network calls**.
+
+### 3. API Refactor: Scripts vs. Hashes
+
+I encountered a friction point between my abstract architecture and the concrete library.
+
+* **My Architecture:** Preferred pure `sha256::Hash`.
+* **Electrum Library:** Requires the full `Script` bytes to perform a subscription.
+
+I updated the `ElectrumApi` trait to `register_script(ScriptBuf, Hash)`. The Driver now pulls the script from the Engine (which stores it) and passes it to the Client.
+
+### 4. Application Integration (`main.rs`)
+
+I updated the main entry point to support dual modes via `clap`:
+
+* `--sync-mode polling`: Runs the old baseline.
+* `--sync-mode streaming`: Runs the new engine with the cached client.
+
+### Architecture Diagram: The Cache Hit Flow
+
+```mermaid
+sequenceDiagram
+    participant Engine as ⚙️ StreamingEngine
+    participant Driver as 🏎️ ElectrumDriver
+    participant Client as 💾 CachedClient
+    participant Disk as 📄 JSON Cache
+    participant Net as ☁️ Electrum Server
+
+    Note over Engine, Net: 🚀 STARTUP (Instant Resume)
+
+    Driver->>Engine: Event::Connected
+    Engine->>Driver: Command::Subscribe(Addr #0)
+    Driver->>Client: register_script(Addr #0)
+    
+    Client->>Disk: check cache
+    Disk-->>Client: Found [TxA, TxB]
+    
+    Note over Client: 🔥 INSTANT TRIGGER
+    Client->>Client: push_pending(Addr #0)
+    
+    Driver->>Client: poll()
+    Client-->>Driver: Change(Addr #0)
+    
+    Driver->>Engine: Event::ScriptHashChanged
+    Engine->>Driver: Command::FetchHistory
+    Driver->>Client: fetch_history(Addr #0)
+    Client-->>Driver: returns [TxA, TxB] (from RAM)
+
+```
+
+### Next Steps
+
+The system now works against the real network with persistence.
+The next logical step is to verify this behavior with a live test against `testnet` and compare the "Warm Sync" timings against the baseline established in Day 05.
+
+
+```

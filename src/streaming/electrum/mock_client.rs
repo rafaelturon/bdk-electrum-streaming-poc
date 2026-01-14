@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 
 use bitcoin::hashes::sha256;
 use bitcoin::Txid;
+use bitcoin::ScriptBuf;
 
 use super::driver::ElectrumApi;
 
@@ -32,7 +33,7 @@ impl MockElectrumClient {
 }
 
 impl ElectrumApi for MockElectrumClient {
-    fn subscribe_scripthash(&mut self, hash: sha256::Hash) {
+    fn register_script(&mut self, _script: ScriptBuf, hash: sha256::Hash) {
         self.subscribed.insert(hash);
     }
 

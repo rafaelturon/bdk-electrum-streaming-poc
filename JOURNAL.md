@@ -1192,5 +1192,60 @@ sequenceDiagram
 The system now works against the real network with persistence.
 The next logical step is to verify this behavior with a live test against `testnet` and compare the "Warm Sync" timings against the baseline established in Day 05.
 
+---
 
-```
+## 📅 2026-01-16 | Day 12: Architectural Hygiene & Domain-Driven Refactor
+
+### Objective
+
+We have a working End-to-End system (Mock) and a Real system (Cached Client). However, the codebase was starting to look messy. We had "vendored" code (the `jobs` module) mixing with my custom `driver` architecture, and types were scattered globally.
+
+Today's goal was **Architectural Hygiene**. I wanted to enforce strict layering so that the folder structure explains the system design.
+
+### 1. The "Domain" Layer (`src/streaming/domain`)
+
+I moved the `DerivedSpkTracker` into a new `domain` module.
+
+* **Why:** This logic is pure Bitcoin math (descriptors, derivation, gap limits). It has nothing to do with "Jobs" or "Engines" or "Network". It is the **Core Domain**.
+
+### 2. The "Runtime" Layer (`src/streaming/runtime`)
+
+I moved the `ElectrumDriver` into a new `runtime` module.
+
+* **Why:** The driver is not an "Electrum" component; it is the **Runtime Orchestrator**. It creates the infinite loop. It happens to *use* Electrum, but it conceptually sits above the network layer.
+
+### 3. The "Engine" Encapsulation
+
+I moved the global `streaming/types.rs` into `streaming/engine/types.rs`.
+
+* **Why:** `EngineCommand` and `EngineEvent` are specific to the State Machine. They shouldn't be global types. This tightens the scope.
+
+### 4. Interface Decoupling (`src/streaming/electrum/api.rs`)
+
+I extracted the `ElectrumApi` trait out of the driver and into its own file.
+
+* **Why:** This is classic Dependency Inversion.
+* The `Runtime` depends on the `Api` definition.
+* The `Electrum` module implements the `Api` definition.
+* Neither depends concretely on the other.
+
+
+### 5. Cleaning the "Scaffolding"
+
+I deleted the `jobs` module (`spk_job.rs`, `chain_job.rs`) and `req.rs`.
+
+* **Reason:** These were artifacts I vendored early on to understand the logic. My `StreamingEngine` + `ElectrumDriver` architecture has effectively replaced the need for these disjointed jobs. Deleting code is the most satisfying part of coding.
+
+### Architecture After Refactor
+
+The dependency flow is now strictly unidirectional:
+
+`Runtime (Driver)` → `Engine (State)` → `Domain (Tracker)`
+↓
+`Electrum (Network)`
+
+### Next Steps
+
+With the codebase clean and the architecture solidified, I am ready to return to the `CachedPollingClient` and verify the "Instant Resume" timings against the baseline.
+
+---

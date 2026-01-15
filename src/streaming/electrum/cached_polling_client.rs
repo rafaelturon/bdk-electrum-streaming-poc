@@ -16,7 +16,7 @@ use bdk_electrum::electrum_client::{
 use serde::{Serialize, Deserialize};
 use serde_json;
 
-use crate::streaming::electrum::driver::ElectrumApi;
+use crate::streaming::electrum::api::ElectrumApi;
 
 /// Only persist HISTORY.
 /// ScriptStatus is opaque and not serializable.

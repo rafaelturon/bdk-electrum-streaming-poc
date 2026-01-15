@@ -5,8 +5,8 @@ use bitcoin::Txid;
 use bdk_wallet::miniscript::{Descriptor, DescriptorPublicKey};
 
 use crate::streaming::engine::StreamingEngine;
-use crate::streaming::jobs::spk_tracker::DerivedSpkTracker;
-use crate::streaming::types::{EngineCommand, EngineEvent};
+use crate::streaming::domain::spk_tracker::DerivedSpkTracker;
+use crate::streaming::engine::types::{EngineCommand, EngineEvent};
 
 fn test_descriptor() -> Descriptor<DescriptorPublicKey> {
     Descriptor::from_str(

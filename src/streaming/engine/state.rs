@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use bitcoin::{Txid, ScriptBuf};
 use bitcoin::hashes::sha256;
 
-use crate::streaming::jobs::spk_tracker::DerivedSpkTracker;
+use crate::streaming::domain::spk_tracker::DerivedSpkTracker;
 
 #[derive(Debug)]
 pub struct EngineState<K> {

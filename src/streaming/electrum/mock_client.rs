@@ -4,7 +4,7 @@ use bitcoin::hashes::sha256;
 use bitcoin::Txid;
 use bitcoin::ScriptBuf;
 
-use super::driver::ElectrumApi;
+use super::api::ElectrumApi;
 
 /// Pure in-memory mock Electrum client for tests
 pub struct MockElectrumClient {

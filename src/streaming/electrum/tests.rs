@@ -6,9 +6,9 @@ use bitcoin::hashes::{sha256d, Hash};
 use bdk_wallet::miniscript::{Descriptor, DescriptorPublicKey};
 
 use crate::streaming::engine::StreamingEngine;
-use crate::streaming::electrum::driver::ElectrumDriver;
+use crate::streaming::runtime::ElectrumDriver;
 use crate::streaming::electrum::mock_client::MockElectrumClient;
-use crate::streaming::jobs::spk_tracker::DerivedSpkTracker;
+use crate::streaming::domain::spk_tracker::DerivedSpkTracker;
 
 fn test_descriptor() -> Descriptor<DescriptorPublicKey> {
     Descriptor::from_str(

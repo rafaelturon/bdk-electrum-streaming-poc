@@ -1,7 +1,8 @@
-pub mod adapter;
+pub mod client;
 pub mod engine;
-pub mod types;
-pub mod req;
-
+pub mod domain;
+pub mod runtime;
 pub mod electrum;
-pub mod jobs;
+
+//#[cfg(test)]
+//pub mod tests;

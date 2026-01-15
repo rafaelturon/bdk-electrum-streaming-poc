@@ -10,18 +10,19 @@
 
 mod state;
 mod logic;
+pub mod types;
 
 #[cfg(test)]
 mod tests;
 
-pub use crate::streaming::types::{EngineEvent, EngineCommand};
+pub use crate::streaming::engine::types::{EngineEvent, EngineCommand};
 
 use std::collections::{BTreeSet, HashMap};
 
 use bitcoin::{ScriptBuf};
 use bitcoin::hashes::sha256;
 
-use crate::streaming::jobs::spk_tracker::DerivedSpkTracker;
+use crate::streaming::domain::spk_tracker::DerivedSpkTracker;
 
 use state::EngineState;
 use logic::*;

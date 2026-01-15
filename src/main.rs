@@ -10,10 +10,8 @@ use bdk_electrum_streaming_poc::setup_wallet;
 use bdk_electrum_streaming_poc::polling::auto_sync;
 
 // Streaming
-use bdk_electrum_streaming_poc::streaming::electrum::{
-    cached_polling_client::CachedPollingElectrumClient,
-    driver::ElectrumDriver,
-};
+use bdk_electrum_streaming_poc::streaming::electrum::cached_polling_client::CachedPollingElectrumClient;
+use bdk_electrum_streaming_poc::streaming::runtime::ElectrumDriver;
 
 #[derive(ValueEnum, Clone, Debug)]
 enum SyncMode {
@@ -99,7 +97,7 @@ fn run_polling(args: &Args) -> Result<()> {
 fn run_streaming(args: &Args) -> Result<()> {
     use std::str::FromStr;
     use bdk_wallet::miniscript::{Descriptor, DescriptorPublicKey};
-    use bdk_electrum_streaming_poc::streaming::jobs::spk_tracker::DerivedSpkTracker;
+    use bdk_electrum_streaming_poc::streaming::domain::spk_tracker::DerivedSpkTracker;
     use bdk_electrum_streaming_poc::streaming::engine::StreamingEngine;
 
     println!("[STREAMING] Setting up descriptors...");

@@ -1,7 +1,7 @@
 use bitcoin::hashes::sha256;
 
 use crate::streaming::engine::state::EngineState;
-use crate::streaming::types::EngineCommand;
+use crate::streaming::engine::types::EngineCommand;
 
 pub fn on_connected<K: Ord + Clone>(state: &mut EngineState<K>) -> Vec<EngineCommand> {
     state.connected = true;

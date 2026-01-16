@@ -1249,3 +1249,89 @@ The dependency flow is now strictly unidirectional:
 With the codebase clean and the architecture solidified, I am ready to return to the `CachedPollingClient` and verify the "Instant Resume" timings against the baseline.
 
 ---
+## 📅 2026-01-17 | Day 13: The Async Bridge & The Speed of Light
+
+### Objective
+
+We have arrived at the "Final Boss" of the networking layer.
+The `CachedPollingClient` (Day 09) was a valid bridge, but it was still fundamentally blocking. To achieve true sub-second latency and handle thousands of subscriptions efficiently, we need **Asynchronous I/O**.
+
+Today, I built the `AsyncElectrumClient`.
+
+### 1. The "Sync-to-Async" Bridge
+
+The biggest challenge was impedance mismatch:
+
+* **The Driver:** A synchronous, infinite loop (Conceptually simple, easy to test).
+* **The Network:** An asynchronous, event-driven stream (Tokio, Futures).
+
+I solved this with a **Shared State Bridge** architecture.
+
+1. **Public Face:** `AsyncElectrumClient` implements the blocking `ElectrumApi` trait. It looks like a normal object to the Driver.
+2. **Private Core:** On initialization, it spawns a hidden `std::thread` containing a `tokio::runtime::Runtime`.
+3. **Communication:** A `Mutex<SharedState>` holds queues for `subscribe`, `fetch`, and `pending` notifications.
+
+When the Driver calls `poll()`, it simply pops from the `SharedState` queue—an operation that takes nanoseconds—while the background Tokio task handles the heavy lifting of TLS encryption and JSON parsing.
+
+### 2. Hand-Rolling JSON-RPC
+
+I dropped the `electrum-client` crate entirely for this implementation. To get maximum control over the stream (and support `blockchain.scripthash.subscribe` natively), I implemented the protocol from scratch using `tokio::net::TcpStream` and `serde_json`.
+
+* **Request ID Management:** An `AtomicU64` ensures thread-safe correlation between Requests and Responses.
+* **Stream Parsing:** A `BufReader` reads newline-delimited JSON messages, routing them immediately to either the "Notification Handler" (for push events) or the "Response Handler" (for `get_history` results).
+
+### 3. Benchmarking "Time-to-Data"
+
+To scientifically measure the win, I added deep instrumentation to the `StreamingEngine` state.
+
+* Captured `start_time` on initialization.
+* Added a `first_history_seen` flag.
+* Log the exact duration until the first real wallet history arrives.
+
+```rust
+// The "Money Shot" Log
+println!("STREAMING WALLET READY — first history received after {:?}", state.start_time.elapsed());
+
+```
+
+### 4. Structural Refactor
+
+To accommodate the growing number of client implementations, I reorganized the `electrum` module:
+
+* `mock/` → Pure memory testing.
+* `blocking/` → The cached polling client (Day 09).
+* `async_client/` → The new production-grade implementation.
+
+### Architecture Diagram: The Async Bridge
+
+```mermaid
+sequenceDiagram
+    participant Driver as 🏎️ Sync Driver
+    participant Mutex as 🔒 Shared State
+    participant Tokio as ⚡ Async Task
+    participant Net as ☁️ Electrum Server
+
+    Note over Driver, Tokio: The Bridge Pattern
+
+    Driver->>Mutex: push(Subscribe Addr #1)
+    
+    loop Background Thread
+        Tokio->>Mutex: pop()
+        Tokio->>Net: {"method": "blockchain.scripthash.subscribe", ...}
+        Net-->>Tokio: {"result": "status_hash"}
+        
+        Net-->>Tokio: {"method": "blockchain.scripthash.subscribe", "params": ["..."]}
+        Tokio->>Mutex: push(Change Detected)
+    end
+    
+    Driver->>Mutex: poll()
+    Mutex-->>Driver: Change Event
+
+```
+
+### Next Steps
+
+The architecture is now fully realized. The Driver drives, the Engine thinks, and the Async Client streams.
+The final step is to run this against Mainnet (or a busy Testnet) and verify that the "UX Tax" we measured in Day 04 (~4 seconds) has indeed dropped to ~0.
+
+---

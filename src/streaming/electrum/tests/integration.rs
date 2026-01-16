@@ -7,7 +7,7 @@ use bdk_wallet::miniscript::{Descriptor, DescriptorPublicKey};
 
 use crate::streaming::engine::StreamingEngine;
 use crate::streaming::runtime::ElectrumDriver;
-use crate::streaming::electrum::mock_client::MockElectrumClient;
+use crate::streaming::electrum::mock::client::MockElectrumClient;
 use crate::streaming::domain::spk_tracker::DerivedSpkTracker;
 
 fn test_descriptor() -> Descriptor<DescriptorPublicKey> {

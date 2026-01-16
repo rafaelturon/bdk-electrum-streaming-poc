@@ -18,6 +18,7 @@ mod tests;
 pub use crate::streaming::engine::types::{EngineEvent, EngineCommand};
 
 use std::collections::{BTreeSet, HashMap};
+use std::time::Instant;
 
 use bitcoin::{ScriptBuf};
 use bitcoin::hashes::sha256;
@@ -36,6 +37,8 @@ impl<K: Ord + Clone> StreamingEngine<K> {
     pub fn new(spk_tracker: DerivedSpkTracker<K>) -> Self {
         Self {
             state: EngineState {
+                start_time: Instant::now(),
+                first_history_seen: false,
                 spk_tracker,
                 spk_index_by_hash: HashMap::new(),
                 script_by_hash: HashMap::new(),

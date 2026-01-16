@@ -1,10 +1,11 @@
 pub mod api;
-pub mod mock_client;
-pub mod cached_polling_client;
+pub mod mock;
+pub mod blocking;
+pub mod async_client;
 
 pub use api::ElectrumApi;
-pub use mock_client::MockElectrumClient;
-pub use cached_polling_client::CachedPollingElectrumClient;
+pub use mock::client::MockElectrumClient;
+pub use blocking::client::CachedPollingElectrumClient;
 
 #[cfg(test)]
 mod tests;

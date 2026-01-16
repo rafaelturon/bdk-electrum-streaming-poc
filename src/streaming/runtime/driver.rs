@@ -37,7 +37,7 @@ where
         self.process_engine(EngineEvent::Connected);
 
         loop {
-            log::info!("[DRIVER] Waiting for change...");
+            //log::info!("[DRIVER] Waiting for change...");
             if let Some(hash) = self.client.poll_scripthash_changed() {
                 log::info!("[DRIVER] Change detected: {}", hash);
                 self.process_engine(EngineEvent::ScriptHashChanged(hash));
@@ -60,6 +60,7 @@ where
     fn execute_command(&mut self, cmd: EngineCommand, queue: &mut Vec<EngineEvent>) {
         match cmd {
              EngineCommand::Subscribe(hash) => {
+                log::info!("[DRIVER] Subscribing hash {}", hash);
                 let script = self.engine.script_for_hash(&hash).expect("engine invariant");
                 self.client.register_script(script, hash);
             }

@@ -1,16 +1,10 @@
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
-use std::path::PathBuf;
 use bdk_wallet::bitcoin::Network;
 use bdk_electrum::electrum_client;
 
 use bdk_electrum_streaming_poc::setup_wallet;
-
-// Existing polling
 use bdk_electrum_streaming_poc::polling::auto_sync;
-
-// Streaming
-use bdk_electrum_streaming_poc::streaming::electrum::cached_polling_client::CachedPollingElectrumClient;
 use bdk_electrum_streaming_poc::streaming::runtime::ElectrumDriver;
 
 #[derive(ValueEnum, Clone, Debug)]
@@ -96,9 +90,13 @@ fn run_polling(args: &Args) -> Result<()> {
 
 fn run_streaming(args: &Args) -> Result<()> {
     use std::str::FromStr;
+    use std::time::Instant;
+
     use bdk_wallet::miniscript::{Descriptor, DescriptorPublicKey};
     use bdk_electrum_streaming_poc::streaming::domain::spk_tracker::DerivedSpkTracker;
     use bdk_electrum_streaming_poc::streaming::engine::StreamingEngine;
+
+    use bdk_electrum_streaming_poc::streaming::electrum::async_client::client::AsyncElectrumClient;
 
     println!("[STREAMING] Setting up descriptors...");
 
@@ -108,11 +106,6 @@ fn run_streaming(args: &Args) -> Result<()> {
             Some(d) => Some(Descriptor::from_str(d)?),
             None => None,
         };
-
-    println!("[STREAMING] Connecting to Electrum: {}", args.electrum_url);
-    let electrum = electrum_client::Client::new(&args.electrum_url)?;
-    let cache_path = PathBuf::from("electrum-cache.json");
-    let blocking = CachedPollingElectrumClient::new(electrum, cache_path);
 
     println!("[STREAMING] Building script tracker...");
 
@@ -126,8 +119,16 @@ fn run_streaming(args: &Args) -> Result<()> {
     println!("[STREAMING] Building streaming engine...");
     let engine = StreamingEngine::new(tracker);
 
-    let driver = ElectrumDriver::new(engine, blocking);
+    println!("[STREAMING] Creating async electrum client...");
+    let client = AsyncElectrumClient::new(args.electrum_url.clone());
+
+    let driver = ElectrumDriver::new(engine, client);
 
     println!("[STREAMING] Starting streaming loop...");
+
+    let t0 = Instant::now();
+    println!("[STREAMING] t0 = {:?}", t0);
+
     driver.run_forever();
 }
+

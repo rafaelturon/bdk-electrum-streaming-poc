@@ -4,11 +4,16 @@ use crate::streaming::engine::state::EngineState;
 use crate::streaming::engine::types::EngineCommand;
 
 pub fn on_connected<K: Ord + Clone>(state: &mut EngineState<K>) -> Vec<EngineCommand> {
+    log::info!("[ENGINE] on_connected: enumerating scripts");
+    let count = state.spk_tracker.all_spks().count();
+    log::info!("[ENGINE] total scripts = {}", count);
+
     state.connected = true;
 
     let mut cmds = Vec::new();
 
     for (hash, script) in state.spk_tracker.all_spks() {
+        log::info!("[ENGINE] discovered script {}", hash);
         if let Some((kc, idx)) = state.spk_tracker.index_of_spk_hash(hash) {
             state.spk_index_by_hash.insert(*hash, (kc, idx));
             state.script_by_hash.insert(*hash, script.clone());
@@ -31,6 +36,15 @@ pub fn on_scripthash_history<K: Ord + Clone>(
     hash: sha256::Hash,
     txs: Vec<bitcoin::Txid>,
 ) -> Vec<EngineCommand> {
+    // BENCHMARK HOOK — FIRST REAL DATA
+    if !state.first_history_seen {
+        state.first_history_seen = true;
+        println!(
+            "STREAMING WALLET READY — first history received after {:?}",
+            state.start_time.elapsed()
+        );
+    }
+
     let mut cmds = Vec::new();
 
     let prev = state.histories.get(&hash);

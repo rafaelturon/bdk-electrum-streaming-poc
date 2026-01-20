@@ -1,5 +1,5 @@
 use bitcoin::hashes::sha256;
-use bitcoin::Txid;
+use bitcoin::{Transaction, ScriptBuf};
 
 #[derive(Debug, Clone)]
 pub enum EngineEvent {
@@ -7,7 +7,7 @@ pub enum EngineEvent {
     ScriptHashChanged(sha256::Hash),
     ScriptHashHistory {
         hash: sha256::Hash,
-        txs: Vec<Txid>,
+        txs: Vec<Transaction>,
     },
 }
 
@@ -16,5 +16,6 @@ pub enum EngineEvent {
 pub enum EngineCommand {
     Subscribe(sha256::Hash),
     FetchHistory(sha256::Hash),
+    ApplyTransactions { script: ScriptBuf, txs: Vec<Transaction>, },
 }
 

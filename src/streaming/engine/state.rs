@@ -8,7 +8,8 @@ use crate::streaming::domain::spk_tracker::DerivedSpkTracker;
 #[derive(Debug)]
 pub struct EngineState<K> {
     pub start_time: Instant,
-    pub first_history_seen: bool,
+    pub first_history_seen_at: Option<Instant>,
+    pub first_tx_seen_at: Option<Instant>,
 
     pub spk_tracker: DerivedSpkTracker<K>,
 

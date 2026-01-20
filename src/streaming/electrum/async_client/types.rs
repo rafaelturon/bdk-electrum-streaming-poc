@@ -1,4 +1,4 @@
-use bitcoin::{Txid, ScriptBuf};
+use bitcoin::{Txid, ScriptBuf, Transaction};
 use bitcoin::hashes::sha256;
 
 /// Commands sent FROM Driver TO Async Client
@@ -11,6 +11,7 @@ pub enum ElectrumCommand {
     FetchHistory {
         hash: sha256::Hash,
     },
+    ApplyTransactions { script: ScriptBuf, txs: Vec<Transaction> },
 }
 
 /// Events sent FROM Async Client TO Driver

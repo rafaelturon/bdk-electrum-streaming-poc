@@ -5,7 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use bitcoin::hashes::sha256;
-use bitcoin::{ScriptBuf, Txid};
+use bitcoin::{ScriptBuf, Txid, Transaction};
 
 use bdk_electrum::electrum_client::{
     Client,
@@ -138,10 +138,6 @@ impl ElectrumApi for CachedPollingElectrumClient {
         self.last_status.entry(hash).or_insert(None);
     }
 
-    fn fetch_history(&mut self, hash: sha256::Hash) -> Vec<Txid> {
-        self.history_cache.get(&hash).cloned().unwrap_or_default()
-    }
-
     fn poll_scripthash_changed(&mut self) -> Option<sha256::Hash> {
         if let Some(h) = self.pending.pop_front() {
             return Some(h);
@@ -156,5 +152,14 @@ impl ElectrumApi for CachedPollingElectrumClient {
 
             thread::sleep(self.poll_interval);
         }
+    }
+    fn fetch_history_txs(&mut self, _hash: sha256::Hash) -> Vec<Transaction> {
+        // TEMP: return empty until you wire real tx fetch
+        vec![]
+    }
+    fn request_history(&mut self, hash: sha256::Hash) {
+        // Mock is synchronous: history is always ready
+        // So we do nothing here.
+        let _ = hash;
     }
 }

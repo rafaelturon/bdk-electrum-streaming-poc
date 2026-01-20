@@ -8,7 +8,7 @@
 //!
 //! It consumes EngineEvent and emits EngineCommand.
 
-mod state;
+pub mod state;
 mod logic;
 pub mod types;
 
@@ -38,7 +38,8 @@ impl<K: Ord + Clone> StreamingEngine<K> {
         Self {
             state: EngineState {
                 start_time: Instant::now(),
-                first_history_seen: false,
+                first_history_seen_at: None,
+                first_tx_seen_at: None,
                 spk_tracker,
                 spk_index_by_hash: HashMap::new(),
                 script_by_hash: HashMap::new(),
@@ -55,7 +56,7 @@ impl<K: Ord + Clone> StreamingEngine<K> {
             EngineEvent::ScriptHashChanged(h) => on_scripthash_changed(&mut self.state, h),
             EngineEvent::ScriptHashHistory { hash, txs } => {
                 on_scripthash_history(&mut self.state, hash, txs)
-            }
+            },
         }
     }
 

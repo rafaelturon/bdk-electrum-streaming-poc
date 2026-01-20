@@ -7,7 +7,6 @@ edition = "2021"
 # BDK dependencies
 bdk_wallet = { version = "2.3", features = ["file_store"] }
 bdk_electrum = "0.23"
-bdk_file_store = "0.22"
 
 # Other dependencies
 bitcoin = "0.32.2"

@@ -1,5 +1,6 @@
 use bitcoin::hashes::sha256;
-
+use std::time::Instant;
+use bitcoin::Txid;
 use crate::streaming::engine::state::EngineState;
 use crate::streaming::engine::types::EngineCommand;
 
@@ -20,6 +21,10 @@ pub fn on_connected<K: Ord + Clone>(state: &mut EngineState<K>) -> Vec<EngineCom
         }
 
         if state.subscribed.insert(*hash) {
+            // 1) WARM BOOTSTRAP: fetch full history first
+            cmds.push(EngineCommand::FetchHistory(*hash));
+
+            // 2) Then subscribe for future updates
             cmds.push(EngineCommand::Subscribe(*hash));
         }
     }
@@ -34,11 +39,11 @@ pub fn on_scripthash_changed<K>(_: &mut EngineState<K>, hash: sha256::Hash) -> V
 pub fn on_scripthash_history<K: Ord + Clone>(
     state: &mut EngineState<K>,
     hash: sha256::Hash,
-    txs: Vec<bitcoin::Txid>,
+    txs: Vec<bitcoin::Transaction>,
 ) -> Vec<EngineCommand> {
     // BENCHMARK HOOK — FIRST REAL DATA
-    if !state.first_history_seen {
-        state.first_history_seen = true;
+    if state.first_history_seen_at.is_none() && !txs.is_empty() {
+        state.first_history_seen_at = Some(Instant::now());
         println!(
             "STREAMING WALLET READY — first history received after {:?}",
             state.start_time.elapsed()
@@ -51,7 +56,26 @@ pub fn on_scripthash_history<K: Ord + Clone>(
     let was_empty = prev.map(|v| v.is_empty()).unwrap_or(true);
     let is_empty = txs.is_empty();
 
-    state.histories.insert(hash, txs);
+    let now = Instant::now();
+    // First history response with any content
+    if state.first_history_seen_at.is_none() && !txs.is_empty() {
+        state.first_history_seen_at = Some(now);
+        log::info!(
+            "[METRIC] First non-empty history at {:?}",
+            now.duration_since(state.start_time)
+        );
+    }
+    // First TX seen globally
+    if state.first_tx_seen_at.is_none() && !txs.is_empty() {
+        state.first_tx_seen_at = Some(now);
+        log::info!(
+            "[METRIC] First TX seen at {:?}",
+            now.duration_since(state.start_time)
+        );
+    }    
+    let txids: Vec<Txid> = txs.iter().map(|t| t.compute_txid()).collect();
+    state.histories.insert(hash, txids.clone());
+
 
     if was_empty && !is_empty {
         if let Some((keychain, index)) = state.spk_index_by_hash.get(&hash).cloned() {
@@ -64,11 +88,21 @@ pub fn on_scripthash_history<K: Ord + Clone>(
                 state.script_by_hash.insert(new_hash, new_script.clone());
 
                 if state.subscribed.insert(new_hash) {
+                    // 1) Warm fetch for newly derived script
+                    cmds.push(EngineCommand::FetchHistory(new_hash));
+
+                    // 2) Then subscribe for future updates
                     cmds.push(EngineCommand::Subscribe(new_hash));
                 }
             }
         }
     }
+
+    let script = state.script_by_hash.get(&hash).cloned().unwrap();
+    cmds.push(EngineCommand::ApplyTransactions {
+        script,
+        txs,
+    });
 
     cmds
 }

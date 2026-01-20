@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 
 use bitcoin::hashes::sha256;
 use bitcoin::Txid;
-use bitcoin::ScriptBuf;
+use bitcoin::{ScriptBuf, Transaction};
 
 use crate::streaming::electrum::ElectrumApi;
 
@@ -37,11 +37,16 @@ impl ElectrumApi for MockElectrumClient {
         self.subscribed.insert(hash);
     }
 
-    fn fetch_history(&mut self, hash: sha256::Hash) -> Vec<Txid> {
-        self.histories.get(&hash).cloned().unwrap_or_default()
-    }
-
     fn poll_scripthash_changed(&mut self) -> Option<sha256::Hash> {
         self.notifications.pop_front()
+    }
+    fn fetch_history_txs(&mut self, _hash: sha256::Hash) -> Vec<Transaction> {
+        // Mock returns empty tx list
+        vec![]
+    }
+    fn request_history(&mut self, hash: sha256::Hash) {
+        // Mock is synchronous: history is always ready
+        // So we do nothing here.
+        let _ = hash;
     }
 }

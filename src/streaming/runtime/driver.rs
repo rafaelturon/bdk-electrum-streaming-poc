@@ -51,12 +51,20 @@ where
         self.t0.elapsed().as_micros()
     }
 
+    fn info(&self, msg: &str) {
+        log::trace!("[DRIVER] {:>8}us: {}", self.t(), msg);
+    }
+
     fn trace(&self, msg: &str) {
-        log::debug!("[DRIVER +{:>8} us] {}", self.t(), msg);
+        log::trace!("[DRIVER] {:>8}us: {}", self.t(), msg);
+    }
+
+    fn debug(&self, msg: &str) {
+        log::debug!("[DRIVER] {:>8}us: {}", self.t(), msg);
     }
 
     pub fn run_forever(mut self) -> ! {
-        self.trace("starting driver");
+        self.info("starting driver");
 
         // ---- Bootstrap engine
         self.process_engine(EngineEvent::Connected);
@@ -93,41 +101,48 @@ where
     }
 
     fn execute_command(&mut self, cmd: EngineCommand, _queue: &mut Vec<EngineEvent>) {
-        log::debug!("[DRIVER +{:>8} us] cmd: {:?}", self.t0.elapsed().as_micros(), cmd);
+        self.debug(&format!("{:>8}us cmd: {:?}", self.t0.elapsed().as_micros(), cmd));
         match cmd {
             EngineCommand::Subscribe(hash) => {
                 self.trace(&format!("cmd: Subscribe({})", hash));
 
-                let script = self
-                    .engine
-                    .script_for_hash(&hash)
-                    .expect("engine invariant: script missing");
-
-                self.client.register_script(script, hash);
+                if let Some(script) = self.engine.script_for_hash(&hash) {
+                    self.client.register_script(script, hash);
+                } else {
+                    log::error!("[DRIVER] No script for hash {}", hash);
+                }
             }
 
             EngineCommand::FetchHistory(hash) => {
-                log::debug!("[DRIVER] request_history({})", hash);
+                self.trace(&format!("cmd: FetchHistory({})", hash));
                 self.client.request_history(hash);
             }
 
             EngineCommand::ApplyTransactions { script: _, txs } => {
-                self.trace(&format!("cmd: ApplyTransactions({} txs)", txs.len()));
+                self.trace(&format!("[ENGINE] cmd: ApplyTransactions({} txs)", txs.len()));
 
                 if txs.is_empty() {
-                    self.trace("no txs to apply");
+                    self.trace("[ENGINE] no txs to apply");
                     return;
                 }
 
                 let mut update = bdk_wallet::Update::default();
 
                 for tx in txs {
-                    self.trace(&format!("apply tx {}", tx.compute_txid()));
+                    self.trace(&format!("[WALLET] apply tx {}", tx.compute_txid()));
                     update.tx_update.txs.push(Arc::new(tx));
                 }
 
+                log::trace!(
+                    "[WALLET] applying {} txs",
+                    update.tx_update.txs.len()
+                );
                 let mut w = self.wallet.lock().unwrap();
-                let _ = w.apply_update(update);
+                let r = w.apply_update(update);
+                log::trace!(
+                    "[WALLET] apply_update result = {:?}",
+                    r
+                );
             }
         }
     }

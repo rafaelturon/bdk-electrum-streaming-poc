@@ -7,14 +7,14 @@ use crate::streaming::engine::types::EngineCommand;
 pub fn on_connected<K: Ord + Clone>(state: &mut EngineState<K>) -> Vec<EngineCommand> {
     log::info!("[ENGINE] on_connected: enumerating scripts");
     let count = state.spk_tracker.all_spks().count();
-    log::info!("[ENGINE] total scripts = {}", count);
+    log::debug!("[ENGINE] total scripts = {}", count);
 
     state.connected = true;
 
     let mut cmds = Vec::new();
 
     for (hash, script) in state.spk_tracker.all_spks() {
-        log::info!("[ENGINE] discovered script {}", hash);
+        log::debug!("[ENGINE] discovered script {}", hash);
         if let Some((kc, idx)) = state.spk_tracker.index_of_spk_hash(hash) {
             state.spk_index_by_hash.insert(*hash, (kc, idx));
             state.script_by_hash.insert(*hash, script.clone());

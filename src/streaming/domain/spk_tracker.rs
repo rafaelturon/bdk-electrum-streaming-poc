@@ -69,6 +69,7 @@ impl<K: Ord + Clone> DerivedSpkTracker<K> {
         descriptor: Descriptor<DescriptorPublicKey>,
         next_index: u32,
     ) -> Vec<(sha256::Hash, ScriptBuf)> {
+        log::trace!("[DerivedSpkTracker] KeyChain{0}: {1}", next_index, descriptor);
         if let Some(old) = self.descriptors.insert(keychain.clone(), descriptor.clone()) {
             if old == descriptor {
                 return vec![];

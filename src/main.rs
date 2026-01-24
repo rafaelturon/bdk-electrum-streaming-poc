@@ -81,7 +81,7 @@ fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
 
-    println!("[MAIN] Sync mode: {:?}", args.sync_mode);
+    log::info!("[MAIN] Sync mode: {:?}", args.sync_mode);
 
     match args.sync_mode {
         SyncMode::Polling => {
@@ -91,10 +91,10 @@ fn main() -> Result<()> {
             let _ = run_streaming(&args)?;
         }
         SyncMode::Both => {
-            println!("[MAIN] Running POLLING first...");
+            log::info!("[MAIN] Running POLLING first...");
             let polling = run_polling(&args)?;
 
-            println!("\n\n[MAIN] Running STREAMING next...");
+            log::info!("\n\n[MAIN] Running STREAMING next...");
             let streaming = run_streaming(&args)?;
 
             print_comparison(&polling, &streaming);
@@ -105,7 +105,7 @@ fn main() -> Result<()> {
 }
 
 fn run_polling(args: &Args) -> Result<SyncResult> {
-    println!("[POLLING] Setting up wallet...");
+    log::info!("[POLLING] Setting up wallet...");
 
     let mut wallet = setup_wallet(
         args.descriptor.clone(),
@@ -113,11 +113,11 @@ fn run_polling(args: &Args) -> Result<SyncResult> {
         args.network,
     )?;
 
-    println!("[POLLING] Connecting to Electrum: {}", args.electrum_url);
+    log::debug!("[POLLING] Connecting to Electrum: {}", args.electrum_url);
     let electrum_client = electrum_client::Client::new(&args.electrum_url)?;
     let client = bdk_electrum::BdkElectrumClient::new(electrum_client);
 
-    println!("[POLLING] Starting Auto Sync...");
+    log::info!("[POLLING] Starting Auto Sync...");
     let stats = auto_sync(&mut wallet, &client, 10)?;
 
     let balance = wallet.balance();
@@ -139,35 +139,32 @@ fn run_polling(args: &Args) -> Result<SyncResult> {
 
 fn run_streaming(args: &Args) -> Result<SyncResult> {
     use std::str::FromStr;
-
     use bdk_wallet::miniscript::{Descriptor, DescriptorPublicKey};
     use bdk_electrum_streaming_poc::streaming::domain::spk_tracker::DerivedSpkTracker;
     use bdk_electrum_streaming_poc::streaming::engine::StreamingEngine;
     use bdk_electrum_streaming_poc::streaming::electrum::async_client::client::AsyncElectrumClient;
     use bdk_electrum_streaming_poc::streaming::runtime::ElectrumDriver;
 
-    println!("[STREAMING] Setting up descriptors...");
-
+    log::info!("[STREAMING] Setting up descriptors...");
     let external: Descriptor<DescriptorPublicKey> = Descriptor::from_str(&args.descriptor)?;
     let change: Option<Descriptor<DescriptorPublicKey>> =
         match &args.change_descriptor {
             Some(d) => Some(Descriptor::from_str(d)?),
             None => None,
         };
+    log::debug!("[STREAMING] Descriptor: {}", &args.descriptor);
 
-    println!("[STREAMING] Building script tracker...");
-
+    log::info!("[STREAMING] Building script tracker...");
     let mut tracker = DerivedSpkTracker::<String>::new(20);
     tracker.insert_descriptor("external".to_string(), external, 0);
-
     if let Some(change_desc) = change {
         tracker.insert_descriptor("internal".to_string(), change_desc, 0);
     }
 
-    println!("[STREAMING] Building streaming engine...");
+    log::info!("[STREAMING] Building streaming engine...");
     let engine = StreamingEngine::new(tracker);
 
-    println!("[STREAMING] Creating async electrum client...");
+    log::info!("[STREAMING] Creating async electrum client...");
     let client = AsyncElectrumClient::new(args.electrum_url.clone());
 
     // ---- STATS ----
@@ -206,6 +203,7 @@ fn run_streaming(args: &Args) -> Result<SyncResult> {
         let w = wallet.lock().unwrap();
         w.balance().total().to_sat()
     };
+    log::trace!("[WALLET] FINAL balance = {:?}", balance);
 
     println!("[STREAMING] Initial Sync Finished");
     println!("-----------------------------------");

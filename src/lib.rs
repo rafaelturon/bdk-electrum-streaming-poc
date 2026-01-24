@@ -30,11 +30,11 @@ pub fn setup_wallet(
 
     let wallet = match wallet_opt {
         Some(wallet) => {
-            println!("[LIBR] Wallet loaded from persistence.");
+            log::info!("[LIBR] Wallet loaded from persistence.");
             wallet
         }
         None => {
-            println!("[LIBR] Creating new wallet...");
+            log::info!("[LIBR] Creating new wallet...");
             let change_desc = change_descriptor
                 .clone()
                 .expect("[LIBR] Change descriptor required for new wallet");

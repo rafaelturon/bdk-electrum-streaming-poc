@@ -1427,3 +1427,78 @@ The code is instrumented. The benchmark is ready.
 The final step is to merge this to `main`, run the testnet benchmark, and document the final results as the conclusion of this PoC.
 
 ---
+
+## 📅 2026-01-19 | Day 15: Robustness, and Race Conditions
+
+### Objective
+
+The benchmark proved the architecture is fast (28x speedup). But "fast" isn't enough; it has to be **robust**.
+During stress testing, I encountered occasional deadlocks and race conditions in the `AsyncElectrumClient`.
+Today’s mission was to stabilize the network layer, clean up the logs, and deliver a "Golden Master" of the codebase.
+
+### 1. The Full-Duplex Refactor (`client.rs`)
+
+I discovered a subtle issue in the `AsyncElectrumTask`: handling reads and writes in the same loop can lead to head-of-line blocking.
+I refactored the connection logic to spawn a **dedicated Reader Task**.
+
+* **Old Way:** `loop { flush_outgoing(); read_one_message(); }`
+* **New Way:**
+* **Task A (Writer):** flushes outgoing queues.
+* **Task B (Reader):** `tokio::spawn(async move { ... })` reads lines continuously and pushes them to `process_message`.
+
+
+
+This ensures that a large incoming history dump never blocks us from sending a new subscription request.
+
+### 2. The "Start-Up" Race Condition
+
+The Driver was sometimes starting before the TLS handshake finished.
+I introduced a `Condvar` to the `AsyncElectrumClient` constructor.
+The main thread now blocks on `cv.wait(guard)` until the background thread sets `state.connected = true`. This guarantees that `client.new()` returns a fully viable connection.
+
+### 3. The DNS Resolution Trap
+
+Tokio's DNS resolution can be tricky in certain environments. I replaced the pure async connect with a hybrid approach:
+
+1. Resolve address using `std::net` (reliable, blocking).
+2. Connect using `std::net::TcpStream`.
+3. Transfer ownership to `tokio::net::TcpStream::from_std`.
+This fixed the intermittent "no address resolved" errors I was seeing.
+
+### 4. Log Hygiene
+
+I replaced all `println!` calls with proper `log` macros (`info!`, `debug!`, `trace!`).
+I also tuned the verbosity:
+
+* **INFO:** High-level state changes ("Sync mode: Streaming").
+* **DEBUG:** Key driver events ("cmd: Subscribe").
+* **TRACE:** Raw payload dumps and loop timings.
+
+### Architecture Final State
+
+```mermaid
+sequenceDiagram
+    participant Driver
+    participant Mutex as SharedState
+    participant Writer as Async Writer
+    participant Reader as Async Reader (Spawned)
+    participant Net as Electrum Server
+
+    Note over Driver, Net: Full Duplex Architecture
+
+    Driver->>Mutex: push(Subscribe)
+    
+    loop Writer Loop
+        Writer->>Mutex: drain queues
+        Writer->>Net: {"method": "blockchain.scripthash.subscribe"...}
+    end
+
+    loop Reader Loop
+        Net-->>Reader: {"method": "blockchain.scripthash.subscribe", "params":...}
+        Reader->>Mutex: push(Notification)
+        Reader->>Mutex: notify_driver()
+    end
+
+```
+
+---

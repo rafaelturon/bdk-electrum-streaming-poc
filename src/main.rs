@@ -61,24 +61,28 @@ struct SyncResult {
 #[derive(Parser)]
 #[command(author, version, about)]
 struct Args {
-    #[arg(long, default_value = "testnet")]
+    #[arg(long, default_value = "testnet", env = "BITCOIN_NETWORK")]
     network: Network,
 
-    #[arg(long)]
+    /// Wallet descriptor. Can be loaded from WALLET_DESCRIPTOR env var.
+    #[arg(long, env = "WALLET_DESCRIPTOR")]
     descriptor: String,
 
-    #[arg(long)]
+    /// Change descriptor. Can be loaded from WALLET_CHANGE_DESCRIPTOR env var.
+    #[arg(long, env = "WALLET_CHANGE_DESCRIPTOR")]
     change_descriptor: Option<String>,
 
-    #[arg(long, default_value = "ssl://electrum.blockstream.info:60002")]
+    #[arg(long, default_value = "ssl://electrum.blockstream.info:60002", env = "ELECTRUM_URL")]
     electrum_url: String,
 
-    #[arg(long, value_enum, default_value_t = SyncMode::Polling)]
+    #[arg(long, value_enum, default_value_t = SyncMode::Polling, env = "SYNC_MODE")]
     sync_mode: SyncMode,
 }
-
 fn main() -> Result<()> {
     env_logger::init();
+    // Load .env file variables into the environment
+    dotenvy::dotenv().ok();
+    
     let args = Args::parse();
 
     log::info!("[MAIN] Sync mode: {:?}", args.sync_mode);
@@ -152,7 +156,8 @@ fn run_streaming(args: &Args) -> Result<SyncResult> {
             Some(d) => Some(Descriptor::from_str(d)?),
             None => None,
         };
-    log::debug!("[STREAMING] Descriptor: {}", &args.descriptor);
+    // Don't log the full descriptor if it might contain private keys
+    log::debug!("[STREAMING] Descriptor loaded");
 
     log::info!("[STREAMING] Building script tracker...");
     let mut tracker = DerivedSpkTracker::<String>::new(20);

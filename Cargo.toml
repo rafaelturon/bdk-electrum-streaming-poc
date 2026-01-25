@@ -13,7 +13,8 @@ bitcoin = "0.32.2"
 bytes = "1"
 hex = "0.4"
 tokio = { version = "1", features = ["full"] }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
+dotenvy = "0.15"
 tokio-rustls = "0.25"
 tokio-native-tls = "0.3"
 native-tls = "0.2"

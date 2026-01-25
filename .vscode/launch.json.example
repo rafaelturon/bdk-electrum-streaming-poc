@@ -1,0 +1,22 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug (Template)",
+            "type": "lldb",
+            "request": "launch",
+            "env": {
+                "RUST_LOG": "bdk_electrum_streaming_poc=debug"
+            },
+            "cargo": {
+                "args": [
+                    "run",
+                    "--bin", "bdk-electrum-streaming-poc",
+                    "--",
+                    "--network", "testnet",
+                    "--sync-mode", "streaming"
+                ]
+            }
+        }
+    ]
+}

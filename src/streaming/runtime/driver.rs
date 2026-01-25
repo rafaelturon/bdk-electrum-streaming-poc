@@ -51,6 +51,26 @@ where
         self.t0.elapsed().as_micros()
     }
 
+    #[cfg(test)]
+    pub fn run_until_idle(&mut self) {
+        let mut sanity = 0;
+        while let Some(hash) = self.client.poll_scripthash_changed() {
+            self.trace(&format!("test run_until_idle: ScriptHashChanged({})", hash));
+            self.process_engine(EngineEvent::ScriptHashChanged(hash));
+            
+            sanity += 1;
+            if sanity > 100 {
+                log::warn!("[DRIVER] run_until_idle exceeded 100 iterations, breaking");
+                break;
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub fn engine_mut(&mut self) -> &mut StreamingEngine<K> {
+        &mut self.engine
+    }
+
     fn info(&self, msg: &str) {
         log::trace!("[DRIVER] {:>8}us: {}", self.t(), msg);
     }
@@ -86,7 +106,7 @@ where
         }
     }
 
-    fn process_engine(&mut self, event: EngineEvent) {
+    pub fn process_engine(&mut self, event: EngineEvent) {
         let mut queue = vec![event];
 
         while let Some(ev) = queue.pop() {

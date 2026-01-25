@@ -1500,5 +1500,115 @@ sequenceDiagram
     end
 
 ```
+---
+
+## 📅 2026-01-20 | Day 16: The Network Layer Refined & Developer Sanity
+
+### Objective
+
+After the architectural cleanup of Day 15, I turned my attention to the internals of the `AsyncElectrumClient` and the overall developer experience.
+
+The async client works, but its internal state was becoming "queue hell." It had separate `VecDeque`s for subscriptions, history requests, and transaction fetches. This made the `flush_outgoing` loop verbose and hard to reason about.
+
+Today's goal was to **Simplify State** and **Improve Tooling**.
+
+### 1. The Unified Command Queue
+
+I refactored `SharedState` to replace the specialized queues with a single `command_queue` holding `InternalCommand` enums.
+
+* **Before:** `subscribe_queue`, `history_request_queue`, `tx_request_queue`.
+* **After:**
+```rust
+pub enum InternalCommand {
+    Subscribe { hash, script },
+    FetchHistory { hash },
+    FetchTransaction { txid, related_hash }
+}
+
+```
+
+This simplified the writer loop significantly. It now just drains one queue and matches on the command type.
+
+### 2. Request Correlation
+
+I introduced a `RequestType` enum to track in-flight requests. When a response comes back with `id: 123`, the reader task checks `inflight_requests` to know if it should parse the result as a `History` list or a `Transaction`.
+
+### 3. Developer Experience (DevEx)
+
+I was tired of typing long CLI arguments for every test run.
+
+* **Env Vars:** Added `dotenvy` support. Now `ELECTRUM_URL` and `WALLET_DESCRIPTOR` are loaded from `.env`.
+* **VS Code:** Added a `.vscode/launch.json` configuration to enable F5 debugging with the correct environment variables.
+
+### 4. Test Robustness
+
+The integration tests were failing intermittently because they all tried to lock the same `wallet_db.dat`.
+I updated the test helpers to generate unique temporary directories for each test run (`bdk_test_{timestamp}`), ensuring isolation.
+
+### Architecture Visualization
+
+I added a class diagram to the journal to document the relationship between the Driver, the Engine, and the polymorphic Network Clients.
+
+```mermaid
+classDiagram
+    %% The Abstract Interface
+    class ElectrumApi {
+        <<interface>>
+        +get_tip() BlockId
+        +fetch_history(script_hash) List~Tx~
+        +subscribe(script_hash) bool
+    }
+
+    %% The Concrete Implementations
+    class AsyncElectrumClient {
+        -stream: TcpStream
+        -shared_state: Arc~Mutex~State~~
+        +new(url)
+    }
+
+    class CachedPollingElectrumClient {
+        -cache: DiskCache
+        -inner_client: Client
+    }
+
+    class MockElectrumClient {
+        -expectations: Map
+    }
+
+    %% The Orchestrator (Imperative Shell)
+    class ElectrumDriver {
+        -engine: StreamingEngine
+        -client: Box~dyn ElectrumApi~
+        +run()
+        +process_events()
+    }
+
+    %% The Pure Logic (Functional Core)
+    class StreamingEngine {
+        -tracker: SpkTracker
+        -history: TransactionHistory
+        +apply(event)
+        +poll_commands()
+    }
+
+    %% Relationships
+    AsyncElectrumClient ..|> ElectrumApi : Implements
+    CachedPollingElectrumClient ..|> ElectrumApi : Implements
+    MockElectrumClient ..|> ElectrumApi : Implements
+    
+    ElectrumDriver --> ElectrumApi : Uses (Polymorphism)
+    ElectrumDriver *-- StreamingEngine : Owns (Composition)
+
+```
+
+### Analyzing the Diagram
+
+* **Polymorphism:** Notice how `ElectrumDriver` depends only on the `ElectrumApi` interface (the dashed arrow), not the specific classes.
+* **Composition:** The `ElectrumDriver` *owns* the `StreamingEngine` (the solid diamond arrow), meaning the engine is an integral part of the driver's state.
+
+### Next Steps
+
+The codebase is now clean, documented, and easy to run. The internal plumbing of the async client is far more maintainable.
 
 ---
+

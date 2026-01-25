@@ -34,20 +34,47 @@ pub fn electrum_scripthash(script: &[u8]) -> String {
 }
 
 // =====================================================================
+// Types
+// =====================================================================
+
+#[derive(Debug)]
+pub enum InternalCommand {
+    Subscribe {
+        hash: sha256::Hash,
+        script: ScriptBuf,
+    },
+    FetchHistory {
+        hash: sha256::Hash,
+    },
+    FetchTransaction {
+        txid: Txid,
+        related_hash: sha256::Hash,
+    }
+}
+
+#[derive(Debug)]
+pub enum RequestType {
+    History(sha256::Hash),
+    Transaction(sha256::Hash),
+}
+
+// =====================================================================
 // Shared State
 // =====================================================================
 
 struct SharedState {
+    // --- Output (Network -> Driver) ---
     ready: VecDeque<sha256::Hash>,
     history_cache: HashMap<sha256::Hash, Vec<Transaction>>,
-    watched: HashMap<sha256::Hash, ScriptBuf>,
-    subscribe_queue: VecDeque<sha256::Hash>,
-    history_request_queue: VecDeque<sha256::Hash>,
-    inflight_history: HashMap<u64, sha256::Hash>,
-    tx_request_queue: VecDeque<(u64, Txid)>,
-    connected: bool,
-    inflight_tx: HashMap<u64, sha256::Hash>,
+
+    // --- Input (Driver -> Network) ---
+    command_queue: VecDeque<InternalCommand>,
+
+    // --- Tracking ---
+    inflight_requests: HashMap<u64, RequestType>,
     remaining_txs: HashMap<sha256::Hash, usize>,
+    
+    connected: bool,
 }
 
 // =====================================================================
@@ -63,14 +90,10 @@ impl AsyncElectrumClient {
         let state = Arc::new(Mutex::new(SharedState {
             ready: VecDeque::new(),
             history_cache: HashMap::new(),
-            watched: HashMap::new(),
-            subscribe_queue: VecDeque::new(),
-            history_request_queue: VecDeque::new(),
-            inflight_history: HashMap::new(),
-            tx_request_queue: VecDeque::new(),
+            command_queue: VecDeque::new(),
+            inflight_requests: HashMap::new(),
+            remaining_txs: HashMap::new(),
             connected: false,
-            inflight_tx: HashMap::new(),
-            remaining_txs: HashMap::new(),  
         }));
 
         let bg_state = state.clone();
@@ -111,27 +134,25 @@ impl ElectrumApi for AsyncElectrumClient {
         log::debug!("[ADAPTER] register_script({})", hash);
         let mut s = self.state.lock().unwrap();
 
-        s.watched.insert(hash, script);
-        s.subscribe_queue.push_back(hash);
-        s.history_request_queue.push_back(hash);
+        // Push commands to the single queue
+        s.command_queue.push_back(InternalCommand::Subscribe { hash, script });
+        s.command_queue.push_back(InternalCommand::FetchHistory { hash });
 
         log::debug!(
-            "[ADAPTER] queued subscribe + history for {} (subs={}, hist={})",
+            "[ADAPTER] queued subscribe + history for {} (queue len={})",
             hash,
-            s.subscribe_queue.len(),
-            s.history_request_queue.len()
+            s.command_queue.len(),
         );
     }
 
     fn request_history(&mut self, hash: sha256::Hash) {
         log::debug!("[HISTORY] request_history({})", hash);
         let mut s = self.state.lock().unwrap();
-        s.history_request_queue.push_back(hash);
+        s.command_queue.push_back(InternalCommand::FetchHistory { hash });
     }
 
     fn fetch_history_txs(&mut self, hash: sha256::Hash) -> Vec<Transaction> {
         let mut s = self.state.lock().unwrap();
-        log::trace!("[HISTORY] cache keys at fetch = {:?}", s.history_cache.keys().collect::<Vec<_>>());
         let txs = s.history_cache.remove(&hash).unwrap_or_default();
         log::trace!(
             "[HISTORY] fetch_history_txs({}) -> {} txs",
@@ -144,7 +165,9 @@ impl ElectrumApi for AsyncElectrumClient {
     fn poll_scripthash_changed(&mut self) -> Option<sha256::Hash> {
         let mut s = self.state.lock().unwrap();
         let item = s.ready.pop_front();
-        log::trace!("[ENGINE] poll_scripthash_changed -> {:?}", item);
+        if let Some(h) = item {
+             log::trace!("[ENGINE] poll_scripthash_changed -> {:?}", h);
+        }
         item
     }
 }
@@ -168,25 +191,16 @@ impl AsyncElectrumTask {
         let (host, port) = parse_server(&server)?;
         log::debug!("[CONNECT] Connecting to {}:{} ...", host, port);      
         
-        log::info!("[CONNECT] resolving host...");
         let addr: SocketAddr = (host.as_str(), port)
             .to_socket_addrs()?
             .next()
             .ok_or_else(|| anyhow::anyhow!("no address resolved"))?;
-        log::debug!("[CONNECT] resolved to {}", addr);
         
-        log::info!("[CONNECT] connecting (blocking std::net::TcpStream)...");
         let std_tcp = std::net::TcpStream::connect(addr)?;
         std_tcp.set_nonblocking(true)?;
-        log::info!("[CONNECT] std TCP CONNECTED");
         
         let tcp = TcpStream::from_std(std_tcp)?;
-        log::info!("[CONNECT] converted to tokio TcpStream");
-
-        log::info!("[CONNECT] building TLS connector");
         let connector = TlsConnector::from(native_tls::TlsConnector::new()?);
-
-        log::info!("[CONNECT] starting TLS handshake");
         let tls = connector.connect(&host, tcp).await?;
 
         log::info!("[CONNECT] TLS CONNECTED");
@@ -245,8 +259,6 @@ impl AsyncElectrumTask {
             "params": ["bdk-streaming-poc", "1.4"]
         }))
         .await?;
-        log::info!("[SEND] server.version done");
-
         Ok(())
     }
 
@@ -259,69 +271,60 @@ impl AsyncElectrumTask {
     }
 
     async fn flush_outgoing(&mut self) -> Result<()> {
-        let (subs, history_reqs, tx_reqs) = {
+        // Drain the single command queue
+        let commands: Vec<InternalCommand> = {
             let mut s = self.state.lock().unwrap();
-            (
-                s.subscribe_queue.drain(..).collect::<Vec<_>>(),
-                s.history_request_queue.drain(..).collect::<Vec<_>>(),
-                s.tx_request_queue.drain(..).collect::<Vec<_>>(),
-            )
+            s.command_queue.drain(..).collect()
         };
 
-        // Subscriptions
-        for hash in subs {
-            let script = {
-                let s = self.state.lock().unwrap();
-                s.watched.get(&hash).cloned()
-            };
+        for cmd in commands {
+            match cmd {
+                InternalCommand::Subscribe { hash: _, script } => {
+                    let sh = electrum_scripthash(script.as_bytes());
+                    // Note: We don't track the ID for subscriptions as we don't need the response result
+                    // (The notification handles the useful part)
+                    self.send(&json!({
+                        "jsonrpc": "2.0",
+                        "id": next_id(),
+                        "method": "blockchain.scripthash.subscribe",
+                        "params": [sh]
+                    })).await?;
+                }
+                InternalCommand::FetchHistory { hash } => {
+                    let mut bytes = hash.to_byte_array();
+                    bytes.reverse();
+                    let sh = hex::encode(bytes);
+                    let id = next_id();
 
-            if let Some(script) = script {
-                let sh = electrum_scripthash(script.as_bytes());
-                self.send(&json!({
-                    "jsonrpc": "2.0",
-                    "id": next_id(),
-                    "method": "blockchain.scripthash.subscribe",
-                    "params": [sh]
-                }))
-                .await?;
-                log::info!("[SEND] blockchain.scripthash.subscribe done");
+                    {
+                        let mut s = self.state.lock().unwrap();
+                        s.inflight_requests.insert(id, RequestType::History(hash));
+                    }
+
+                    self.send(&json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "method": "blockchain.scripthash.get_history",
+                        "params": [sh]
+                    })).await?;
+                }
+                InternalCommand::FetchTransaction { txid, related_hash } => {
+                    let id = next_id();
+                    {
+                        let mut s = self.state.lock().unwrap();
+                        s.inflight_requests.insert(id, RequestType::Transaction(related_hash));
+                    }
+
+                    self.send(&json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "method": "blockchain.transaction.get",
+                        "params": [txid.to_string(), true]
+                    })).await?;
+                }
             }
         }
-
-        // History requests
-        for hash in history_reqs {
-            let mut bytes = hash.to_byte_array();
-            bytes.reverse();
-            let sh = hex::encode(bytes);
-            let id = next_id();
-
-            {
-                let mut s = self.state.lock().unwrap();
-                s.inflight_history.insert(id, hash);
-            }
-
-            self.send(&json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "method": "blockchain.scripthash.get_history",
-                "params": [sh]
-            }))
-            .await?;
-            log::info!("[SEND] blockchain.scripthash.get_history done");
-        }
-
-        // Tx requests
-        for (id, txid) in tx_reqs {
-            self.send(&json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "method": "blockchain.transaction.get",
-                "params": [txid.to_string(), true]
-            }))
-            .await?;
-            log::info!("[SEND] blockchain.transaction.get done");
-        }
-
+        
         Ok(())
     }
 
@@ -336,10 +339,13 @@ impl AsyncElectrumTask {
 }
 
 // =====================================================================
+// Message Processing
+// =====================================================================
+
 async fn process_message(line: &str, state: &Arc<Mutex<SharedState>>) -> Result<()> {
     let msg: Value = serde_json::from_str(line)?;
     log::trace!("[HISTORY] process_message line:{}", line.trim());
-
+    
     // ============================================================
     // Notifications (no id)
     // ============================================================
@@ -374,97 +380,65 @@ async fn process_message(line: &str, state: &Arc<Mutex<SharedState>>) -> Result<
         .as_u64()
         .ok_or_else(|| anyhow::anyhow!("response without numeric id"))?;
 
-    // ------------------------------------------------------------
-    // Handle responses with id
-    // ------------------------------------------------------------
-    if let Some(id) = msg.get("id").and_then(|v| v.as_u64()) {
-        // -------------------------------
-        // History response
-        // -------------------------------
-        if let Some(result) = msg.get("result") {
-            let mut s = state.lock().unwrap();
+    let request_type = {
+        let mut s = state.lock().unwrap();
+        s.inflight_requests.remove(&id)
+    };
 
-            if let Some(hash) = s.inflight_history.remove(&id) {
-                let arr = result.as_array().ok_or_else(|| anyhow::anyhow!("history not array"))?;
+    if let Some(req) = request_type {
+        match req {
+            RequestType::History(hash) => {
+                 if let Some(result) = msg.get("result") {
+                    let arr = result.as_array().ok_or_else(|| anyhow::anyhow!("history not array"))?;
+                    
+                    let mut s = state.lock().unwrap();
+                    s.remaining_txs.insert(hash, arr.len());
 
-                log::error!(
-                    "[HISTORY] response for {} -> {} entries",
-                    hash,
-                    arr.len()
-                );
+                    if arr.is_empty() {
+                        // Empty history, ready immediately
+                        s.history_cache.insert(hash, vec![]);
+                        s.ready.push_back(hash);
+                    } else {
+                        // Queue up transaction fetches
+                        for item in arr {
+                            let txid_str = item["tx_hash"]
+                                .as_str()
+                                .ok_or_else(|| anyhow::anyhow!("missing tx_hash"))?;
+                            let txid: Txid = txid_str.parse()?;
+                            
+                            // Push back to the command queue to be processed by the writer task
+                            s.command_queue.push_back(InternalCommand::FetchTransaction { 
+                                txid, 
+                                related_hash: hash 
+                            });
+                        }
+                    }
+                 }
+            }
+            RequestType::Transaction(hash) => {
+                if let Some(result) = msg.get("result") {
+                    let tx: Transaction = serde_json::from_value(result.clone())?;
+                    let mut s = state.lock().unwrap();
+                    
+                    s.history_cache.entry(hash).or_default().push(tx);
+                    
+                    let rem = s.remaining_txs.get_mut(&hash).unwrap();
+                    *rem -= 1;
 
-                s.remaining_txs.insert(hash, arr.len());
-
-                if arr.is_empty() {
-                    // No txs: history is empty, finalize immediately
-                    s.history_cache.insert(hash, vec![]);
-                    s.ready.push_back(hash);
-                } else {
-                    for item in arr {
-                        let txid_str = item["tx_hash"]
-                            .as_str()
-                            .ok_or_else(|| anyhow::anyhow!("missing tx_hash"))?;
-
-                        let txid: Txid = txid_str.parse()?;
-                        let tx_req_id = next_id();
-
-                        s.inflight_tx.insert(tx_req_id, hash);
-                        s.tx_request_queue.push_back((tx_req_id, txid));
+                    if *rem == 0 {
+                        s.remaining_txs.remove(&hash);
+                        s.ready.push_back(hash);
+                        log::info!("[HISTORY] history complete for {} ({} txs)", hash, s.history_cache.get(&hash).map(|v| v.len()).unwrap_or(0));
                     }
                 }
-
-                return Ok(());
             }
         }
+    } else {
+        log::trace!("[ASYNC] response with unknown id {} (might be a subscribe response)", id);
     }
-
-    // -------------------------------
-    // Transaction response
-    // -------------------------------
-    if let Some(id) = msg.get("id").and_then(|v| v.as_u64()) {
-        if let Some(result) = msg.get("result") {
-            let tx: Transaction = serde_json::from_value(result.clone())?;
-
-            let mut s = state.lock().unwrap();
-
-            if let Some(hash) = s.inflight_tx.remove(&id) {
-                log::error!(
-                    "[HISTORY] received tx {} for {}",
-                    tx.compute_txid(),
-                    hash
-                );
-
-                s.history_cache.entry(hash).or_default().push(tx);
-
-                let rem = s.remaining_txs.get_mut(&hash).unwrap();
-                *rem -= 1;
-
-                if *rem == 0 {
-                    s.remaining_txs.remove(&hash);
-                    s.ready.push_back(hash);
-
-                    log::error!(
-                        "[HISTORY] history complete for {} ({} txs)",
-                        hash,
-                        s.history_cache.get(&hash).map(|v| v.len()).unwrap_or(0)
-                    );
-                }
-
-                return Ok(());
-            }
-        }
-    }
-
-
-    // ============================================================
-    // Unknown response
-    // ============================================================
-    log::warn!("[ASYNC] response with unknown id {}", id);
 
     Ok(())
 }
-
-// =====================================================================
 
 fn parse_server(s: &str) -> Result<(String, u16)> {
     let s = s.trim();

@@ -63,4 +63,10 @@ impl<K: Ord + Clone> StreamingEngine<K> {
     pub fn script_for_hash(&self, hash: &sha256::Hash) -> Option<ScriptBuf> {
         self.state.script_by_hash.get(hash).cloned()
     }
+
+    #[cfg(test)]
+    pub fn tracker_mut(&mut self) -> &mut crate::streaming::domain::spk_tracker::DerivedSpkTracker<K> {
+        // FIX: Use 'spk_tracker' instead of 'tracker'
+        &mut self.state.spk_tracker
+    }
 }

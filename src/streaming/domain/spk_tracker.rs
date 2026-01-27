@@ -6,15 +6,38 @@ use bitcoin::{ScriptBuf};
 use bitcoin::hashes::{sha256, Hash};
 use bdk_wallet::miniscript::{Descriptor, DescriptorPublicKey};
 
+/// Tracks derived ScriptPubKeys (SPKs) for a set of descriptors.
+///
+/// This struct is responsible for the "Gap Limit" logic in the wallet. It ensures that
+/// we always track a window of unused addresses (the "lookahead") beyond the last known
+/// used index.
+///
+/// It maintains a bidirectional mapping between:
+/// - (Keychain, Index) -> Script/Hash
+/// - ScriptHash -> (Keychain, Index)
 #[derive(Debug, Clone)]
 pub struct DerivedSpkTracker<K> {
+    /// The number of unused addresses to track ahead of the highest used index.
     lookahead: u32,
+
+    /// The active descriptors for each keychain (e.g. "external", "internal").
     descriptors: BTreeMap<K, Descriptor<DescriptorPublicKey>>,
+    
+    /// Forward index: Maps (Keychain, Index) to (ScriptHash, Script).
+    /// Used to generate the list of scripts to monitor.
     derived_spks: BTreeMap<(K, u32), (sha256::Hash, ScriptBuf)>,
+
+    /// Reverse index: Maps ScriptHash to (Keychain, Index).
+    /// Used to identify which wallet address received funds when a notification arrives.
     derived_spks_rev: HashMap<sha256::Hash, (K, u32)>,
 }
 
 impl<K: Ord + Clone> DerivedSpkTracker<K> {
+    /// Creates a new tracker with the specified lookahead (gap limit) size.
+    ///
+    /// # Arguments
+    /// * `lookahead` - The number of addresses to watch beyond the last used index. 
+    ///                 Common values are 20 (standard) or higher for services.
     pub fn new(lookahead: u32) -> Self {
         Self {
             lookahead,
@@ -24,45 +47,26 @@ impl<K: Ord + Clone> DerivedSpkTracker<K> {
         }
     }
 
+    /// Returns an iterator over all currently tracked script hashes and scripts.
+    /// 
+    /// This is typically used upon (re)connection to subscribe to all addresses at once.
     pub fn all_spks(&self) -> impl Iterator<Item = &(sha256::Hash, ScriptBuf)> {
         self.derived_spks.values()
     }
 
+    /// Reverse lookup: Finds the Keychain ID and Index for a given script hash.
+    ///
+    /// Returns `None` if the hash is not tracked.
     pub fn index_of_spk_hash(&self, hash: &sha256::Hash) -> Option<(K, u32)> {
         self.derived_spks_rev.get(hash).cloned()
     }
 
-    fn add_derived_spk(&mut self, keychain: K, index: u32) -> Option<(sha256::Hash, ScriptBuf)> {
-        if let btree_map::Entry::Vacant(entry) =
-            self.derived_spks.entry((keychain.clone(), index))
-        {
-            let descriptor = self.descriptors.get(&keychain).expect("descriptor exists");
-
-            let spk = descriptor
-                .at_derivation_index(index)
-                .expect("can derive")
-                .script_pubkey();
-
-            let hash = sha256::Hash::hash(spk.as_bytes());
-
-            entry.insert((hash, spk.clone()));
-            self.derived_spks_rev.insert(hash, (keychain, index));
-
-            return Some((hash, spk));
-        }
-        None
-    }
-
-    fn clear_keychain(&mut self, keychain: &K) {
-        let removed = self
-            .derived_spks
-            .extract_if(.., |(kc, _), _| kc == keychain);
-
-        for (_, (hash, _)) in removed {
-            self.derived_spks_rev.remove(&hash);
-        }
-    }
-
+    /// Registers or updates a descriptor for a keychain (e.g., "external").
+    ///
+    /// This will derive the initial range of scripts from index `0` up to `next_index + lookahead`.
+    ///
+    /// # Returns
+    /// A list of newly derived scripts that need to be subscribed to.
     pub fn insert_descriptor(
         &mut self,
         keychain: K,
@@ -70,6 +74,7 @@ impl<K: Ord + Clone> DerivedSpkTracker<K> {
         next_index: u32,
     ) -> Vec<(sha256::Hash, ScriptBuf)> {
         log::trace!("[DerivedSpkTracker] KeyChain{0}: {1}", next_index, descriptor);
+        // If the descriptor changed, we must clear old derivations to avoid mixing scripts
         if let Some(old) = self.descriptors.insert(keychain.clone(), descriptor.clone()) {
             if old == descriptor {
                 return vec![];
@@ -77,11 +82,19 @@ impl<K: Ord + Clone> DerivedSpkTracker<K> {
             self.clear_keychain(&keychain);
         }
 
+        // Derive the full window [0 .. next_index + lookahead]
         (0..=next_index + self.lookahead)
             .filter_map(|i| self.add_derived_spk(keychain.clone(), i))
             .collect()
     }
 
+    /// Notifies the tracker that an address at `index` has been used.
+    ///
+    /// This checks if the usage creates a gap larger than permitted. If so, it
+    /// derives new addresses to restore the lookahead window.
+    ///
+    /// # Returns
+    /// A list of *newly* derived scripts that must be subscribed to immediately.
     pub fn mark_used_and_derive_new(
         &mut self,
         keychain: &K,
@@ -90,15 +103,61 @@ impl<K: Ord + Clone> DerivedSpkTracker<K> {
         let next_index = index + 1;
         let mut newly_derived = Vec::new();
 
+        // Check the new required window: [next_index .. next_index + lookahead]
         for i in next_index..=next_index + self.lookahead {
             if let Some(pair) = self.add_derived_spk(keychain.clone(), i) {
                 newly_derived.push(pair);
             } else {
+                // Optimization: If `add_derived_spk` returns None, it means we already
+                // track this index. Since we derive sequentially, we likely track
+                // everything after it too, so we can stop early.
                 break;
             }
         }
 
         newly_derived
+    }
+
+    /// Internal helper: Derives and stores a single script at the given index.
+    ///
+    /// Returns `Some((Hash, Script))` if the script was newly derived.
+    /// Returns `None` if it was already tracked.
+    fn add_derived_spk(&mut self, keychain: K, index: u32) -> Option<(sha256::Hash, ScriptBuf)> {
+        // Use `entry` to avoid re-deriving if it already exists
+        if let btree_map::Entry::Vacant(entry) =
+            self.derived_spks.entry((keychain.clone(), index))
+        {
+            let descriptor = self.descriptors.get(&keychain).expect("descriptor exists");
+
+            // Derive the script at the specific index
+            let spk = descriptor
+                .at_derivation_index(index)
+                .expect("can derive")
+                .script_pubkey();
+
+            let hash = sha256::Hash::hash(spk.as_bytes());
+
+            // Store in both forward and reverse maps
+            entry.insert((hash, spk.clone()));
+            self.derived_spks_rev.insert(hash, (keychain, index));
+
+            return Some((hash, spk));
+        }
+        None
+    }
+
+    /// Internal helper: Removes all tracking data for a specific keychain.
+    /// Used when a descriptor is updated or replaced.
+    fn clear_keychain(&mut self, keychain: &K) {
+        // Efficiently extract all entries belonging to this keychain
+        let removed = self
+            .derived_spks
+            .extract_if(.., |(kc, _), _| kc == keychain);
+
+        // Clean up the reverse map
+        for (_, (hash, _)) in removed {
+            self.derived_spks_rev.remove(&hash);
+        }
     }
 }
 

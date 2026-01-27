@@ -1,3 +1,16 @@
+//! Electrum Protocol Adapter (Async implementation).
+//!
+//! This module implements the `ElectrumApi` trait using a non-blocking Tokio background task.
+//! It acts as a **Facade**, bridging the synchronous/blocking world of the `SyncOrchestrator`
+//! (Driver) with the asynchronous world of network I/O.
+//!
+//! # Architecture
+//! * **Shared State**: Uses `Arc<Mutex<SharedState>>` to communicate between the blocking driver thread
+//!   and the async background task.
+//! * **Command Queue**: The driver pushes commands (Subscribe, Fetch) to a queue. The background task
+//!   drains this queue and sends JSON-RPC requests to the socket.
+//! * **Event Loop**: The background task runs an infinite loop handling socket reads/writes.
+
 use anyhow::Result;
 use serde_json::{json, Value};
 
@@ -21,11 +34,14 @@ use crate::streaming::electrum::api::ElectrumApi;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Generates a unique, monotonically increasing ID for JSON-RPC requests.
 pub fn next_id() -> u64 {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Convert script bytes to electrum scripthash hex (little endian)
+/// Convert script bytes to electrum scripthash hex (little endian).
+///
+/// Electrum uses the sha256 hash of the script, reversed, represented as hex.
 pub fn electrum_scripthash(script: &[u8]) -> String {
     let hash = sha256::Hash::hash(script);
     let mut bytes = hash.to_byte_array();
@@ -37,21 +53,26 @@ pub fn electrum_scripthash(script: &[u8]) -> String {
 // Types
 // =====================================================================
 
+/// Internal commands sent from the synchronous Driver to the Async Task.
 #[derive(Debug)]
 pub enum InternalCommand {
+    /// Subscribe to status updates for a script hash.
     Subscribe {
         hash: sha256::Hash,
         script: ScriptBuf,
     },
+    /// Request the transaction history for a script hash.
     FetchHistory {
         hash: sha256::Hash,
     },
+    /// Request a specific transaction by ID (part of resolving history).
     FetchTransaction {
         txid: Txid,
         related_hash: sha256::Hash,
     }
 }
 
+/// Tracks the type of an in-flight JSON-RPC request to handle the response correctly.
 #[derive(Debug)]
 pub enum RequestType {
     History(sha256::Hash),
@@ -62,18 +83,29 @@ pub enum RequestType {
 // Shared State
 // =====================================================================
 
+/// State shared between the blocking Driver thread and the async Tokio task.
 struct SharedState {
     // --- Output (Network -> Driver) ---
+    /// Queue of script hashes that have received updates or finished syncing.
+    /// The driver polls this via `poll_scripthash_changed`.
     ready: VecDeque<sha256::Hash>,
+
+    /// Temporary storage for downloaded transaction histories.
     history_cache: HashMap<sha256::Hash, Vec<Transaction>>,
 
     // --- Input (Driver -> Network) ---
+    /// Queue of commands waiting to be sent to the Electrum server.
     command_queue: VecDeque<InternalCommand>,
 
     // --- Tracking ---
+    /// Map of Request ID -> Request Type (to correlate responses).
     inflight_requests: HashMap<u64, RequestType>,
+    
+    /// Counter for transactions remaining to be downloaded for a specific history request.
+    /// Key: ScriptHash, Value: Count of txs still pending.
     remaining_txs: HashMap<sha256::Hash, usize>,
     
+    /// Flag indicating if the TLS connection handshake is complete.
     connected: bool,
 }
 
@@ -81,11 +113,19 @@ struct SharedState {
 // Public Client (blocking facade)
 // =====================================================================
 
+/// The main adapter struct used by the `SyncOrchestrator`.
+///
+/// It exposes a synchronous API (`ElectrumApi`) but performs all work
+/// asynchronously in a background thread.
 pub struct ElectrumAdapter {
     state: Arc<Mutex<SharedState>>,
 }
 
 impl ElectrumAdapter {
+    /// Connects to the specified Electrum server (ssl/tcp).
+    ///
+    /// This function blocks the current thread until the background connection
+    /// is fully established and the SSL handshake is complete.
     pub fn new(server: String) -> Self {
         let state = Arc::new(Mutex::new(SharedState {
             ready: VecDeque::new(),
@@ -100,6 +140,7 @@ impl ElectrumAdapter {
         let cv = Arc::new(std::sync::Condvar::new());
         let bg_cv = cv.clone();
 
+        // Spawn the background Tokio runtime and task
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async move {
@@ -112,7 +153,7 @@ impl ElectrumAdapter {
             });
         });
 
-        // Wait until async client is connected
+        // Block until the background task signals connection success
         let mut guard = state.lock().unwrap();
         while !guard.connected {
             guard = cv.wait(guard).unwrap();
@@ -130,6 +171,10 @@ impl ElectrumAdapter {
 // =====================================================================
 
 impl ElectrumApi for ElectrumAdapter {
+    /// Queues a subscription request for a script.
+    ///
+    /// This immediately queues both `Subscribe` and `FetchHistory` commands
+    /// to ensure the client state is consistent from the start.
     fn register_script(&mut self, script: ScriptBuf, hash: sha256::Hash) {
         log::trace!("[ADAPTER] register_script({})", hash);
         let mut s = self.state.lock().unwrap();
@@ -145,12 +190,20 @@ impl ElectrumApi for ElectrumAdapter {
         );
     }
 
+    /// Queues a request to fetch transaction history for a script hash.
     fn request_history(&mut self, hash: sha256::Hash) {
         log::trace!("[HISTORY] request_history({})", hash);
         let mut s = self.state.lock().unwrap();
         s.command_queue.push_back(InternalCommand::FetchHistory { hash });
     }
 
+    /// Retrieves the downloaded transaction history for a hash.
+    ///
+    /// # Return Behavior (Crucial for Option B Logic)
+    /// * Returns `Some(Vec<Tx>)` if the history is **ready** and in the cache.
+    /// * Returns `None` if the history is **pending** (not yet downloaded).
+    ///
+    /// **Note:** This operation is destructive (it removes the item from the cache).
     fn fetch_history_txs(&mut self, hash: sha256::Hash) -> Option<Vec<Transaction>> {
         let mut s = self.state.lock().unwrap();
         let txs = s.history_cache.remove(&hash);
@@ -165,6 +218,9 @@ impl ElectrumApi for ElectrumAdapter {
         txs
     }
 
+    /// Checks if any script hash has new activity or completed syncing.
+    ///
+    /// Returns `Some(hash)` if the driver needs to wake up and process `hash`.
     fn poll_scripthash_changed(&mut self) -> Option<sha256::Hash> {
         let mut s = self.state.lock().unwrap();
         let item = s.ready.pop_front();
@@ -186,6 +242,7 @@ struct AsyncElectrumTask {
 }
 
 impl AsyncElectrumTask {
+    /// Establishes the TCP/TLS connection and performs the version handshake.
     pub async fn connect(
         server: String,
         state: Arc<Mutex<SharedState>>,
@@ -214,6 +271,8 @@ impl AsyncElectrumTask {
         // ===============================
         // Dedicated reader task
         // ===============================
+        // This task runs independently, reading lines from the socket
+        // and dispatching them to `process_message`.
         tokio::spawn(async move {
             let mut reader = BufReader::new(r);
             loop {
@@ -265,6 +324,10 @@ impl AsyncElectrumTask {
         Ok(())
     }
 
+    /// The main write loop.
+    ///
+    /// Continuously drains the `command_queue` and writes requests to the socket.
+    /// Sleeps briefly to avoid busy-waiting when idle.
     pub async fn run_forever(&mut self) -> Result<()> {
         log::info!("[ASYNC] Running forever...");
         loop {
@@ -284,8 +347,8 @@ impl AsyncElectrumTask {
             match cmd {
                 InternalCommand::Subscribe { hash: _, script } => {
                     let sh = electrum_scripthash(script.as_bytes());
-                    // Note: We don't track the ID for subscriptions as we don't need the response result
-                    // (The notification handles the useful part)
+                    // Note: We don't track the ID for subscriptions as we rely on 
+                    // the asynchronous notification ("blockchain.scripthash.subscribe")
                     self.send(&json!({
                         "jsonrpc": "2.0",
                         "id": next_id(),
@@ -369,6 +432,8 @@ async fn process_message(line: &str, state: &Arc<Mutex<SharedState>>) -> Result<
 
                 log::debug!("[HISTORY] scripthash notification for {}", hash);
 
+                // Notify driver that something changed. 
+                // Driver will likely call `request_history` next.
                 let mut s = state.lock().unwrap();
                 s.ready.push_back(hash);
             }
@@ -423,11 +488,13 @@ async fn process_message(line: &str, state: &Arc<Mutex<SharedState>>) -> Result<
                     let tx: Transaction = serde_json::from_value(result.clone())?;
                     let mut s = state.lock().unwrap();
                     
+                    // Add tx to the pending list for this scripthash
                     s.history_cache.entry(hash).or_default().push(tx);
                     
                     let rem = s.remaining_txs.get_mut(&hash).unwrap();
                     *rem -= 1;
 
+                    // If this was the last tx, the history is complete.
                     if *rem == 0 {
                         s.remaining_txs.remove(&hash);
                         s.ready.push_back(hash);

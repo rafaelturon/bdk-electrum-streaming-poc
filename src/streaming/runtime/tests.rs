@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
-    use crate::streaming::engine::{StreamingEngine, EngineEvent}; 
-    use crate::streaming::runtime::ElectrumDriver;
+    use crate::streaming::engine::{SyncEngine, EngineEvent}; 
+    use crate::streaming::runtime::SyncOrchestrator;
     use crate::streaming::electrum::api::ElectrumApi;
     use crate::streaming::domain::spk_tracker::DerivedSpkTracker;
     use bdk_wallet::miniscript::Descriptor;
@@ -31,7 +31,7 @@ mod tests {
             self.history_requests.lock().unwrap().push(hash);
         }
         fn fetch_history_txs(&mut self, _hash: sha256::Hash) -> Option<Vec<Transaction>> {
-            vec![] // Return empty for simplicity
+            vec![].into() // Return empty for simplicity
         }
         fn poll_scripthash_changed(&mut self) -> Option<sha256::Hash> {
             self.notifications.pop_front()
@@ -74,7 +74,7 @@ mod tests {
     #[test]
     fn driver_initial_bootstrap_subscribes() {
         let tracker = DerivedSpkTracker::<String>::new(2);
-        let engine = StreamingEngine::new(tracker);
+        let engine = SyncEngine::new(tracker);
         
         let api = MockApi {
             registered: Arc::new(Mutex::new(vec![])),
@@ -83,7 +83,7 @@ mod tests {
         };
         let registered_clone = api.registered.clone();
 
-        let mut driver = ElectrumDriver::new(engine, api, dummy_wallet());
+        let mut driver = SyncOrchestrator::new(engine, api, dummy_wallet());
 
         driver.process_engine(EngineEvent::Connected);
 
@@ -93,7 +93,7 @@ mod tests {
     #[test]
     fn driver_processes_history_event() {
         let tracker = DerivedSpkTracker::<String>::new(2);
-        let engine = StreamingEngine::new(tracker);
+        let engine = SyncEngine::new(tracker);
         
         let mut api = MockApi {
             registered: Arc::new(Mutex::new(vec![])),
@@ -105,7 +105,7 @@ mod tests {
         api.notifications.push_back(dummy_hash);
 
         let history_requests = api.history_requests.clone();
-        let mut driver = ElectrumDriver::new(engine, api, dummy_wallet());
+        let mut driver = SyncOrchestrator::new(engine, api, dummy_wallet());
 
         driver.run_until_idle();
 

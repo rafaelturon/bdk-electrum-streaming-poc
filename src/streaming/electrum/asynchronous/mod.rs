@@ -1,8 +1,8 @@
-pub mod client;
+pub mod adapter;
 pub mod types;
 
 #[cfg(test)]
 mod tests;
 
-pub use client::AsyncElectrumClient;
+pub use adapter::ElectrumAdapter;
 pub use types::{ElectrumCommand, ElectrumEvent};

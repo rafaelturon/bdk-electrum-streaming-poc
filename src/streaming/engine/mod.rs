@@ -29,11 +29,11 @@ use state::EngineState;
 use logic::*;
 
 #[derive(Debug)]
-pub struct StreamingEngine<K> {
+pub struct SyncEngine<K> {
     state: EngineState<K>,
 }
 
-impl<K: Ord + Clone> StreamingEngine<K> {
+impl<K: Ord + Clone> SyncEngine<K> {
     pub fn new(spk_tracker: DerivedSpkTracker<K>) -> Self {
         Self {
             state: EngineState {

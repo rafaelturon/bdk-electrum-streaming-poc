@@ -81,11 +81,11 @@ struct SharedState {
 // Public Client (blocking facade)
 // =====================================================================
 
-pub struct AsyncElectrumClient {
+pub struct ElectrumAdapter {
     state: Arc<Mutex<SharedState>>,
 }
 
-impl AsyncElectrumClient {
+impl ElectrumAdapter {
     pub fn new(server: String) -> Self {
         let state = Arc::new(Mutex::new(SharedState {
             ready: VecDeque::new(),
@@ -129,7 +129,7 @@ impl AsyncElectrumClient {
 // ElectrumApi
 // =====================================================================
 
-impl ElectrumApi for AsyncElectrumClient {
+impl ElectrumApi for ElectrumAdapter {
     fn register_script(&mut self, script: ScriptBuf, hash: sha256::Hash) {
         log::trace!("[ADAPTER] register_script({})", hash);
         let mut s = self.state.lock().unwrap();

@@ -1,5 +1,5 @@
 #![cfg(test)]
-use crate::streaming::engine::{StreamingEngine, EngineEvent, EngineCommand};
+use crate::streaming::engine::{SyncEngine, EngineEvent, EngineCommand};
 use crate::streaming::domain::spk_tracker::DerivedSpkTracker;
 use bdk_wallet::miniscript::Descriptor;
 use std::str::FromStr;
@@ -39,11 +39,11 @@ fn fake_tx() -> Transaction {
     }
 }
 
-fn setup_engine(lookahead: u32, _start_index: u32) -> StreamingEngine<String> {
+fn setup_engine(lookahead: u32, _start_index: u32) -> SyncEngine<String> {
     let mut tracker = DerivedSpkTracker::new(lookahead);
     tracker.insert_descriptor("external".to_string(), fake_descriptor(0), 0);
     tracker.insert_descriptor("internal".to_string(), fake_descriptor(1), 0);
-    StreamingEngine::new(tracker)
+    SyncEngine::new(tracker)
 }
 
 // =========================================================================

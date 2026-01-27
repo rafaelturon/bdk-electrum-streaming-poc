@@ -1,6 +1,6 @@
 pub mod api;
 pub mod mock;
-pub mod async_client;
+pub mod asynchronous;
 
 pub use api::ElectrumApi;
 pub use mock::client::MockElectrumClient;

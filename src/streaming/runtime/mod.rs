@@ -1,6 +1,6 @@
-mod driver;
+mod orchestrator;
 
 #[cfg(test)]
 mod tests;
 
-pub use driver::ElectrumDriver;
+pub use orchestrator::SyncOrchestrator;

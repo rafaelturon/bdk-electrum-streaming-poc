@@ -1,4 +1,4 @@
-use crate::streaming::engine::StreamingEngine;
+use crate::streaming::engine::SyncEngine;
 use crate::streaming::engine::types::{EngineCommand, EngineEvent};
 use crate::streaming::electrum::api::ElectrumApi;
 
@@ -11,8 +11,8 @@ use std::time::{Instant, Duration};
 type StreamingWallet = PersistedWallet<Store<ChangeSet>>;
 
 /// Drives the StreamingEngine using an Electrum client.
-pub struct ElectrumDriver<K, C> {
-    engine: StreamingEngine<K>,
+pub struct SyncOrchestrator<K, C> {
+    engine: SyncEngine<K>,
     client: C,
     wallet: Arc<Mutex<StreamingWallet>>,
 
@@ -23,13 +23,13 @@ pub struct ElectrumDriver<K, C> {
     t0: Instant,
 }
 
-impl<K, C> ElectrumDriver<K, C>
+impl<K, C> SyncOrchestrator<K, C>
 where
     K: Ord + Clone,
     C: ElectrumApi,
 {
     pub fn new(
-        engine: StreamingEngine<K>,
+        engine: SyncEngine<K>,
         client: C,
         wallet: Arc<Mutex<StreamingWallet>>,
     ) -> Self {
@@ -67,7 +67,7 @@ where
     }
 
     #[cfg(test)]
-    pub fn engine_mut(&mut self) -> &mut StreamingEngine<K> {
+    pub fn engine_mut(&mut self) -> &mut SyncEngine<K> {
         &mut self.engine
     }
 
@@ -181,7 +181,7 @@ where
 }
 
 #[cfg(test)]
-impl<K, C> ElectrumDriver<K, C> {
+impl<K, C> SyncOrchestrator<K, C> {
     pub fn client_ref(&self) -> &C {
         &self.client
     }

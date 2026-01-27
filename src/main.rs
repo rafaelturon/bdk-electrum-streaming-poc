@@ -145,9 +145,9 @@ fn run_streaming(args: &Args) -> Result<SyncResult> {
     use std::str::FromStr;
     use bdk_wallet::miniscript::{Descriptor, DescriptorPublicKey};
     use bdk_electrum_streaming_poc::streaming::domain::spk_tracker::DerivedSpkTracker;
-    use bdk_electrum_streaming_poc::streaming::engine::StreamingEngine;
-    use bdk_electrum_streaming_poc::streaming::electrum::async_client::client::AsyncElectrumClient;
-    use bdk_electrum_streaming_poc::streaming::runtime::ElectrumDriver;
+    use bdk_electrum_streaming_poc::streaming::engine::SyncEngine;
+    use bdk_electrum_streaming_poc::streaming::electrum::asynchronous::adapter::ElectrumAdapter;
+    use bdk_electrum_streaming_poc::streaming::runtime::SyncOrchestrator;
 
     log::info!("[STREAMING] Setting up descriptors...");
     let external: Descriptor<DescriptorPublicKey> = Descriptor::from_str(&args.descriptor)?;
@@ -166,10 +166,10 @@ fn run_streaming(args: &Args) -> Result<SyncResult> {
     }
 
     log::info!("[STREAMING] Building streaming engine...");
-    let engine = StreamingEngine::new(tracker);
+    let engine = SyncEngine::new(tracker);
 
     log::info!("[STREAMING] Creating async electrum client...");
-    let client = AsyncElectrumClient::new(args.electrum_url.clone());
+    let adapter = ElectrumAdapter::new(args.electrum_url.clone());
 
     // ---- STATS ----
     let stats = StreamingStatsHandle::new();
@@ -181,7 +181,7 @@ fn run_streaming(args: &Args) -> Result<SyncResult> {
     )?;
     let wallet = Arc::new(Mutex::new(wallet));
        
-    let driver = ElectrumDriver::new(engine, client, wallet.clone())
+    let orchestrator = SyncOrchestrator::new(engine, adapter, wallet.clone())
         .with_initial_sync_notifier({
             let stats = stats.clone();
             move || {
@@ -194,7 +194,7 @@ fn run_streaming(args: &Args) -> Result<SyncResult> {
         });
 
     std::thread::spawn(move || {
-        driver.run_forever();
+        orchestrator.run_forever();
     });
 
     while !stats.is_done() {

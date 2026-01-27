@@ -3,7 +3,7 @@ mod tests {
     // FIX 1: Import the functions from the 'client' module
     // Adjust the path 'super::client' if your file structure is different.
     // If 'client.rs' is inside 'async_client' folder, this is likely correct:
-    use crate::streaming::electrum::async_client::client::{electrum_scripthash, next_id};
+    use crate::streaming::electrum::asynchronous::adapter::{electrum_scripthash, next_id};
     
     // FIX 2: Correctly import Bitcoin hash types
     use bitcoin::hashes::{sha256, Hash};

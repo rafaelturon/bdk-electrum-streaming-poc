@@ -8,8 +8,8 @@ use bdk_wallet::{PersistedWallet, ChangeSet, Wallet};
 use bdk_wallet::bitcoin::Network;
 use bdk_wallet::file_store::Store;
 
-use crate::streaming::engine::{StreamingEngine, EngineEvent};
-use crate::streaming::runtime::ElectrumDriver;
+use crate::streaming::engine::{SyncEngine, EngineEvent};
+use crate::streaming::runtime::SyncOrchestrator;
 use crate::streaming::electrum::mock::client::MockElectrumClient;
 use crate::streaming::domain::spk_tracker::DerivedSpkTracker;
 
@@ -55,10 +55,10 @@ fn end_to_end_derives_and_subscribes_more() {
     tracker.insert_descriptor("external".to_string(), test_descriptor(), 0);
     // Note: We only insert external here to make the count deterministic (3 addresses: 0, 1, 2)
 
-    let engine = StreamingEngine::new(tracker);
+    let engine = SyncEngine::new(tracker);
     let mock = MockElectrumClient::new();
     let wallet = dummy_wallet();
-    let mut driver = ElectrumDriver::new(engine, mock, wallet);
+    let mut driver = SyncOrchestrator::new(engine, mock, wallet);
 
     // 2. Initial Bootstrap
     println!("[TEST] Bootstrap...");

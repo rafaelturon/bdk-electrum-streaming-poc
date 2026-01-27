@@ -156,7 +156,6 @@ fn run_streaming(args: &Args) -> Result<SyncResult> {
             Some(d) => Some(Descriptor::from_str(d)?),
             None => None,
         };
-    // Don't log the full descriptor if it might contain private keys
     log::debug!("[STREAMING] Descriptor loaded");
 
     log::info!("[STREAMING] Building script tracker...");
@@ -208,8 +207,8 @@ fn run_streaming(args: &Args) -> Result<SyncResult> {
         let w = wallet.lock().unwrap();
         w.balance().total().to_sat()
     };
-    log::trace!("[WALLET] FINAL balance = {:?}", balance);
 
+    println!("[WALLET] FINAL balance = {:?}", balance);
     println!("[STREAMING] Initial Sync Finished");
     println!("-----------------------------------");
     println!("Total Time:       {:?}", dt);

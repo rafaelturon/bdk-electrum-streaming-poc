@@ -55,8 +55,8 @@ impl ElectrumApi for MockElectrumClient {
         item
     }
 
-    fn fetch_history_txs(&mut self, hash: sha256::Hash) -> Vec<Transaction> {
-        self.histories.get(&hash).cloned().unwrap_or_default()
+    fn fetch_history_txs(&mut self, hash: sha256::Hash) -> Option<Vec<Transaction>> {
+        self.histories.get(&hash).cloned()
     }
 
     fn request_history(&mut self, hash: sha256::Hash) {

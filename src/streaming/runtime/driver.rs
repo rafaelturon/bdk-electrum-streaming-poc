@@ -72,34 +72,46 @@ where
     }
 
     fn info(&self, msg: &str) {
-        log::trace!("[DRIVER] {:>8}us: {}", self.t(), msg);
+        log::info!("[DRIVER] {:>8}us: {}", self.t(), msg);
     }
 
     fn trace(&self, msg: &str) {
         log::trace!("[DRIVER] {:>8}us: {}", self.t(), msg);
     }
 
-    fn debug(&self, msg: &str) {
-        log::debug!("[DRIVER] {:>8}us: {}", self.t(), msg);
-    }
-
     pub fn run_forever(mut self) -> ! {
         self.info("starting driver");
-
-        // ---- Bootstrap engine
         self.process_engine(EngineEvent::Connected);
 
-        // ---- Signal "initial sync done" (engine is fully enumerated & requests issued)
         if let Some(cb) = self.on_initial_sync.take() {
-            self.trace("initial engine bootstrap finished");
+            self.info("initial engine bootstrap finished");
             cb();
         }
 
-        // ---- Main loop
         loop {
+            // POLL CLIENT
             if let Some(hash) = self.client.poll_scripthash_changed() {
                 self.trace(&format!("event: ScriptHashChanged({})", hash));
-                self.process_engine(EngineEvent::ScriptHashChanged(hash));
+                
+                // === OPTION B FIX IS HERE ===
+                // Check if the client already has the history data cached.
+                match self.client.fetch_history_txs(hash) {
+                    Some(txs) => {
+                        // CASE A: Cache Hit. Data is ready.
+                        // We construct a ScriptHashHistory event containing the actual transactions.
+                        // The Engine will receive this and immediately emit ApplyTransactions.
+                        self.trace(&format!("[DRIVER] Cache hit for {}, processing {} txs", hash, txs.len()));
+                        self.process_engine(EngineEvent::ScriptHashHistory { hash, txs });
+                    }
+                    None => {
+                        // CASE B: Cache Miss. Data is loading.
+                        // We do NOT send an event to the engine (which would cause a zero-balance update).
+                        // Instead, we explicitly request the history from the network.
+                        // When it arrives, poll_scripthash_changed will fire again, and we'll hit Case A.
+                        self.trace(&format!("[DRIVER] Cache miss for {}, requesting history", hash));
+                        self.client.request_history(hash);
+                    }
+                }
             } else {
                 std::thread::sleep(Duration::from_millis(5));
             }
@@ -121,7 +133,7 @@ where
     }
 
     fn execute_command(&mut self, cmd: EngineCommand, _queue: &mut Vec<EngineEvent>) {
-        self.debug(&format!("{:>8}us cmd: {:?}", self.t0.elapsed().as_micros(), cmd));
+        self.trace(&format!("{:>8}us cmd: {:?}", self.t0.elapsed().as_micros(), cmd));
         match cmd {
             EngineCommand::Subscribe(hash) => {
                 self.trace(&format!("cmd: Subscribe({})", hash));

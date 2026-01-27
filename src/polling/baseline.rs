@@ -26,12 +26,12 @@ pub fn auto_sync(
     rounds: usize,
 ) -> Result<SyncStats> {
     if !has_done_initial_scan() {
-        println!("[SYNC] No scan marker: running COLD START scan");
+        log::info!("[SYNC] No scan marker: running COLD START scan");
         let stats = cold_start_sync(wallet, client, rounds)?;
         mark_initial_scan_done()?;
         Ok(stats)
     } else {
-        println!("[SYNC] First WARM run after restart will still be slow (no streaming cache yet)");
+        log::info!("[SYNC] First WARM run after restart will still be slow (no streaming cache yet)");
         warm_sync(wallet, client)
     }
 }
@@ -41,11 +41,11 @@ pub fn cold_start_sync(
     client: &BdkElectrumClient<bdk_electrum::electrum_client::Client>,
     rounds: usize,
 ) -> Result<SyncStats> {
-    println!("[COLD] Starting progressive sync...");
+    log::info!("[COLD] Starting progressive sync...");
     let global_start = Instant::now();
 
     for round in 1..=rounds {
-        println!("[COLD] Sync round #{} ...", round);
+        log::info!("[COLD] Sync round #{} ...", round);
         let round_start = Instant::now();
         let request = wallet.start_full_scan().build();
         // stop_gap = 20 → discovery mode
@@ -53,7 +53,7 @@ pub fn cold_start_sync(
         wallet.apply_update(update)?;
 
         let round_time = round_start.elapsed();
-        println!("[COLD] Round #{} done in {:?}", round, round_time);
+        log::info!("[COLD] Round #{} done in {:?}", round, round_time);
     }
 
     let total_time = global_start.elapsed();
@@ -68,12 +68,12 @@ pub fn warm_sync(
     wallet: &mut PersistedWallet<Store<ChangeSet>>,
     client: &BdkElectrumClient<bdk_electrum::electrum_client::Client>,
 ) -> Result<SyncStats> {
-    println!("[WARM] Starting incremental sync loop...");
+    log::info!("[WARM] Starting incremental sync loop...");
     let rounds = 1;
     let global_start = Instant::now();
 
     for round in 1..=rounds {
-        println!("[WARM] Sync round #{} ...", round);
+        log::info!("[WARM] Sync round #{} ...", round);
         let round_start = Instant::now();
         // stop_gap = 0  → disables discovery
         let request = wallet.start_full_scan().build();
@@ -81,7 +81,7 @@ pub fn warm_sync(
         wallet.apply_update(update)?;
 
         let round_time = round_start.elapsed();
-        println!("[WARM] Round #{} done in {:?}", round, round_time);
+        log::info!("[WARM] Round #{} done in {:?}", round, round_time);
     }
 
     let total_time = global_start.elapsed();

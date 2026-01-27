@@ -10,7 +10,7 @@ pub trait ElectrumApi {
     /// Blocking poll: returns next script hash that changed (if any)
     fn poll_scripthash_changed(&mut self) -> Option<sha256::Hash>;
 
-    fn fetch_history_txs(&mut self, hash: sha256::Hash) -> Vec<Transaction>;
+    fn fetch_history_txs(&mut self, hash: sha256::Hash) -> Option<Vec<Transaction>>;
 
     fn request_history(&mut self, hash: sha256::Hash);
 }

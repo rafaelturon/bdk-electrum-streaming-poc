@@ -14,7 +14,7 @@ pub fn on_connected<K: Ord + Clone>(state: &mut EngineState<K>) -> Vec<EngineCom
     let mut cmds = Vec::new();
 
     for (hash, script) in state.spk_tracker.all_spks() {
-        log::debug!("[ENGINE] discovered script {}", hash);
+        log::trace!("[ENGINE] discovered script {}", hash);
         if let Some((kc, idx)) = state.spk_tracker.index_of_spk_hash(hash) {
             state.spk_index_by_hash.insert(*hash, (kc, idx));
             state.script_by_hash.insert(*hash, script.clone());

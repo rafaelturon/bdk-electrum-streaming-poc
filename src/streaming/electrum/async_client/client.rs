@@ -21,7 +21,7 @@ use crate::streaming::electrum::api::ElectrumApi;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-fn next_id() -> u64 {
+pub fn next_id() -> u64 {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
@@ -131,14 +131,14 @@ impl AsyncElectrumClient {
 
 impl ElectrumApi for AsyncElectrumClient {
     fn register_script(&mut self, script: ScriptBuf, hash: sha256::Hash) {
-        log::debug!("[ADAPTER] register_script({})", hash);
+        log::trace!("[ADAPTER] register_script({})", hash);
         let mut s = self.state.lock().unwrap();
 
         // Push commands to the single queue
         s.command_queue.push_back(InternalCommand::Subscribe { hash, script });
         s.command_queue.push_back(InternalCommand::FetchHistory { hash });
 
-        log::debug!(
+        log::trace!(
             "[ADAPTER] queued subscribe + history for {} (queue len={})",
             hash,
             s.command_queue.len(),
@@ -146,19 +146,22 @@ impl ElectrumApi for AsyncElectrumClient {
     }
 
     fn request_history(&mut self, hash: sha256::Hash) {
-        log::debug!("[HISTORY] request_history({})", hash);
+        log::trace!("[HISTORY] request_history({})", hash);
         let mut s = self.state.lock().unwrap();
         s.command_queue.push_back(InternalCommand::FetchHistory { hash });
     }
 
-    fn fetch_history_txs(&mut self, hash: sha256::Hash) -> Vec<Transaction> {
+    fn fetch_history_txs(&mut self, hash: sha256::Hash) -> Option<Vec<Transaction>> {
         let mut s = self.state.lock().unwrap();
-        let txs = s.history_cache.remove(&hash).unwrap_or_default();
-        log::trace!(
-            "[HISTORY] fetch_history_txs({}) -> {} txs",
-            hash,
-            txs.len()
-        );
+        let txs = s.history_cache.remove(&hash);
+        
+        // FIX: Handle Option explicitly for logging
+        if let Some(ref t) = txs {
+            log::trace!("[HISTORY] fetch_history_txs({}) -> found {} txs", hash, t.len());
+        } else {
+            log::trace!("[HISTORY] fetch_history_txs({}) -> cache miss", hash);
+        }
+        
         txs
     }
 

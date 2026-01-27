@@ -52,10 +52,14 @@ impl<K: Ord + Clone> StreamingEngine<K> {
 
     pub fn handle_event(&mut self, event: EngineEvent) -> Vec<EngineCommand> {
         match event {
-            EngineEvent::Connected => on_connected(&mut self.state),
-            EngineEvent::ScriptHashChanged(h) => on_scripthash_changed(&mut self.state, h),
+            EngineEvent::Connected => {
+                on_connected(&mut self.state)
+            },
+            EngineEvent::ScriptHashChanged(hash) => {
+                logic::on_scripthash_changed(&mut self.state, hash)
+            },
             EngineEvent::ScriptHashHistory { hash, txs } => {
-                on_scripthash_history(&mut self.state, hash, txs)
+                logic::on_scripthash_history(&mut self.state, hash, txs)
             },
         }
     }

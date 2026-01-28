@@ -20,6 +20,7 @@ use tokio_native_tls::{TlsConnector, TlsStream};
 
 use bitcoin::{ScriptBuf, Transaction, Txid};
 use bitcoin::hashes::{sha256, Hash};
+use bitcoin::consensus::Decodable;
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -181,10 +182,10 @@ impl ElectrumApi for ElectrumAdapter {
 
         // Push commands to the single queue
         s.command_queue.push_back(InternalCommand::Subscribe { hash, script });
-        s.command_queue.push_back(InternalCommand::FetchHistory { hash });
+        //s.command_queue.push_back(InternalCommand::FetchHistory { hash });
 
         log::trace!(
-            "[ADAPTER] queued subscribe + history for {} (queue len={})",
+            "[ADAPTER] queued subscribe for {} (queue len={})",
             hash,
             s.command_queue.len(),
         );
@@ -385,7 +386,7 @@ impl AsyncElectrumTask {
                         "jsonrpc": "2.0",
                         "id": id,
                         "method": "blockchain.transaction.get",
-                        "params": [txid.to_string(), true]
+                        "params": [txid.to_string(), false]
                     })).await?;
                 }
             }
@@ -485,7 +486,10 @@ async fn process_message(line: &str, state: &Arc<Mutex<SharedState>>) -> Result<
             }
             RequestType::Transaction(hash) => {
                 if let Some(result) = msg.get("result") {
-                    let tx: Transaction = serde_json::from_value(result.clone())?;
+                    let hex_str = result.as_str().ok_or_else(|| anyhow::anyhow!("tx result is not a string"))?;
+                    let tx_bytes = hex::decode(hex_str)?;
+                    let tx = Transaction::consensus_decode(&mut &tx_bytes[..])?;
+
                     let mut s = state.lock().unwrap();
                     
                     // Add tx to the pending list for this scripthash

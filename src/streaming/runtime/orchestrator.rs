@@ -4,9 +4,10 @@ use crate::streaming::electrum::api::ElectrumApi;
 
 use bdk_wallet::{PersistedWallet, ChangeSet};
 use bdk_wallet::file_store::Store;
-
+use bitcoin::hashes::sha256;
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, Duration};
+use std::collections::HashSet;
 
 type StreamingWallet = PersistedWallet<Store<ChangeSet>>;
 
@@ -33,6 +34,9 @@ pub struct SyncOrchestrator<K, C> {
     /// Useful for UI loading screens.
     on_initial_sync: Option<Box<dyn FnOnce() + Send>>,
 
+    /// Tracks which script hashes are currently syncing during the bootstrap phase.
+    pending_initial_syncs: HashSet<sha256::Hash>,
+
     /// Start time for logging relative timestamps.
     t0: Instant,
 }
@@ -52,6 +56,7 @@ where
             client,
             wallet,
             on_initial_sync: None,
+            pending_initial_syncs: HashSet::new(),
             t0: Instant::now(),
         }
     }
@@ -60,6 +65,17 @@ where
     pub fn with_initial_sync_notifier<F: FnOnce() + Send + 'static>(mut self, f: F) -> Self {
         self.on_initial_sync = Some(Box::new(f));
         self
+    }
+
+    /// Checks if the initial sync is pending and if all items are done.
+    fn check_initial_sync_complete(&mut self) {
+        // If we have a callback registered AND the pending set is empty...
+        if self.on_initial_sync.is_some() && self.pending_initial_syncs.is_empty() {
+            self.info("initial engine bootstrap finished (all responses received)");
+            if let Some(cb) = self.on_initial_sync.take() {
+                cb();
+            }
+        }
     }
 
     fn t(&self) -> u128 {
@@ -77,12 +93,14 @@ where
 
         // 1. Bootstrap: Tell the engine we are connected so it generates initial subscriptions.
         self.process_engine(EngineEvent::Connected);
+        // Safety check: If wallet is empty (0 addresses), fire immediately.
+        self.check_initial_sync_complete();
 
         // 2. Notify: Signal that bootstrap is done.
-        if let Some(cb) = self.on_initial_sync.take() {
-            self.info("initial engine bootstrap finished");
-            cb();
-        }
+        // if let Some(cb) = self.on_initial_sync.take() {
+        //     self.info("initial engine bootstrap finished");
+        //     cb();
+        // }
 
         // 3. Event Loop
         loop {
@@ -97,11 +115,23 @@ where
                 // Solution: Check if the client actually HAS the data.
                 match self.client.fetch_history_txs(hash) {
                     Some(txs) => {
-                        // CASE A: Cache Hit. Data is downloaded and ready.
-                        // We construct a ScriptHashHistory event containing the actual transactions.
-                        // The Engine receives this and immediately emits ApplyTransactions.
-                        self.trace(&format!("[DRIVER] Cache hit for {}, processing {} txs", hash, txs.len()));
+                        // CASE A: Cache Hit (Data Ready)
+                        self.debug(&format!("[DRIVER] Cache hit for {}, processing {} txs", hash, txs.len()));
+                        
+                        // 1. Update Wallet
                         self.process_engine(EngineEvent::ScriptHashHistory { hash, txs });
+                        
+                        // 2. Mark this hash as synced
+                        self.pending_initial_syncs.remove(&hash);
+                        
+                        // LOG PROGRESS
+                        if self.on_initial_sync.is_some() {
+                            let remaining = self.pending_initial_syncs.len();
+                            self.info(&format!("Initial Sync Progress: {} pending", remaining));
+                        }
+
+                        // 3. Check if we are done with the initial load
+                        self.check_initial_sync_complete();
                     }
                     None => {
                         // CASE B: Cache Miss. We got a notification, but data is missing.
@@ -109,8 +139,13 @@ where
                         // ACTION: Do NOT wake the engine. Explicitly request history from network.
                         // Result: When history arrives later, `poll_scripthash_changed` fires again, 
                         // and we will hit CASE A.
-                        self.trace(&format!("[DRIVER] Cache miss for {}, requesting history", hash));
-                        self.client.request_history(hash);
+                        if self.pending_initial_syncs.contains(&hash) {
+                            self.trace(&format!("[DRIVER] Ignoring cache miss for {} (already pending)", hash));
+                        } else {
+                            // Only request if it's a TRULY new event (post-bootstrap)
+                            self.trace(&format!("[DRIVER] Cache miss for {}, requesting history", hash));
+                            self.client.request_history(hash);
+                        }
                     }
                 }
             } else {
@@ -157,6 +192,12 @@ where
             EngineCommand::FetchHistory(hash) => {
                 // Explicit request for history (used during bootstrap).
                 self.trace(&format!("cmd: FetchHistory({})", hash));
+                // If we are in the bootstrap phase (callback exists),
+                // track this hash as "pending download".
+                if self.on_initial_sync.is_some() {
+                    self.pending_initial_syncs.insert(hash);
+                }
+                
                 self.client.request_history(hash);
             }
 
@@ -220,6 +261,9 @@ where
         log::info!("[DRIVER] {:>8}us: {}", self.t(), msg);
     }
 
+    fn debug(&self, msg: &str) {
+        log::debug!("[DRIVER] {:>8}us: {}", self.t(), msg);
+    }
     fn trace(&self, msg: &str) {
         log::trace!("[DRIVER] {:>8}us: {}", self.t(), msg);
     }

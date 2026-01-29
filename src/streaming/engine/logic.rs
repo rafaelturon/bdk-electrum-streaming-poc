@@ -7,7 +7,7 @@ use crate::streaming::engine::types::EngineCommand;
 pub fn on_connected<K: Ord + Clone>(state: &mut EngineState<K>) -> Vec<EngineCommand> {
     log::info!("[ENGINE] on_connected: enumerating scripts");
     let count = state.spk_tracker.all_spks().count();
-    log::debug!("[ENGINE] total scripts = {}", count);
+    log::info!("[ENGINE] total scripts = {}", count);
 
     state.connected = true;
 
@@ -44,8 +44,8 @@ pub fn on_scripthash_history<K: Ord + Clone>(
     // BENCHMARK HOOK — FIRST REAL DATA
     if state.first_history_seen_at.is_none() && !txs.is_empty() {
         state.first_history_seen_at = Some(Instant::now());
-        println!(
-            "STREAMING WALLET READY — first history received after {:?}",
+        log::debug!(
+            "[ENGINE] Streaming wallet ready. First history received after {:?}",
             state.start_time.elapsed()
         );
     }
@@ -61,7 +61,7 @@ pub fn on_scripthash_history<K: Ord + Clone>(
     if state.first_history_seen_at.is_none() && !txs.is_empty() {
         state.first_history_seen_at = Some(now);
         log::info!(
-            "[METRIC] First non-empty history at {:?}",
+            "[ENGINE] First non-empty history at {:?}",
             now.duration_since(state.start_time)
         );
     }
@@ -69,7 +69,7 @@ pub fn on_scripthash_history<K: Ord + Clone>(
     if state.first_tx_seen_at.is_none() && !txs.is_empty() {
         state.first_tx_seen_at = Some(now);
         log::info!(
-            "[METRIC] First TX seen at {:?}",
+            "[ENGINE] First TX seen at {:?}",
             now.duration_since(state.start_time)
         );
     }    

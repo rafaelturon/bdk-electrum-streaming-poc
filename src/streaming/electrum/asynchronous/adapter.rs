@@ -160,7 +160,7 @@ impl ElectrumAdapter {
             guard = cv.wait(guard).unwrap();
         }
 
-        log::info!("[ASYNC] client fully connected");
+        log::info!("[ADAPTER] client fully connected");
         drop(guard);
 
         Self { state }
@@ -193,7 +193,7 @@ impl ElectrumApi for ElectrumAdapter {
 
     /// Queues a request to fetch transaction history for a script hash.
     fn request_history(&mut self, hash: sha256::Hash) {
-        log::trace!("[HISTORY] request_history({})", hash);
+        log::trace!("[ADAPTER] request_history({})", hash);
         let mut s = self.state.lock().unwrap();
         s.command_queue.push_back(InternalCommand::FetchHistory { hash });
     }
@@ -211,9 +211,9 @@ impl ElectrumApi for ElectrumAdapter {
         
         // FIX: Handle Option explicitly for logging
         if let Some(ref t) = txs {
-            log::trace!("[HISTORY] fetch_history_txs({}) -> found {} txs", hash, t.len());
+            log::trace!("[ADAPTER] fetch_history_txs({}) -> found {} txs", hash, t.len());
         } else {
-            log::trace!("[HISTORY] fetch_history_txs({}) -> cache miss", hash);
+            log::trace!("[ADAPTER] fetch_history_txs({}) -> cache miss", hash);
         }
         
         txs
@@ -250,7 +250,7 @@ impl AsyncElectrumTask {
         cv: Arc<std::sync::Condvar>,
     ) -> Result<Self> {
         let (host, port) = parse_server(&server)?;
-        log::debug!("[CONNECT] Connecting to {}:{} ...", host, port);      
+        log::debug!("[ADAPTER] Connecting to {}:{} ...", host, port);      
         
         let addr: SocketAddr = (host.as_str(), port)
             .to_socket_addrs()?
@@ -264,7 +264,7 @@ impl AsyncElectrumTask {
         let connector = TlsConnector::from(native_tls::TlsConnector::new()?);
         let tls = connector.connect(&host, tcp).await?;
 
-        log::info!("[CONNECT] TLS CONNECTED");
+        log::info!("[ADAPTER] TLS connected");
 
         let (r, w) = tokio::io::split(tls);
         let reader_state = state.clone();
@@ -280,16 +280,16 @@ impl AsyncElectrumTask {
                 let mut line = String::new();
                 match reader.read_line(&mut line).await {
                     Ok(0) => {
-                        log::error!("[ASYNC] socket closed");
+                        log::error!("[ADAPTER] socket closed");
                         break;
                     }
                     Ok(_) => {
                         if let Err(e) = process_message(&line, &reader_state).await {
-                            log::error!("[ASYNC] process_message error: {:?}", e);
+                            log::error!("[ADAPTER] process_message error: {:?}", e);
                         }
                     }
                     Err(e) => {
-                        log::error!("[ASYNC] read error: {:?}", e);
+                        log::error!("[ADAPTER] read error: {:?}", e);
                         break;
                     }
                 }
@@ -309,7 +309,7 @@ impl AsyncElectrumTask {
         }
 
         this.cv.notify_all();
-        log::info!("[ASYNC] electrum connection ready");
+        log::info!("[ADAPTER] electrum connection ready");
 
         Ok(this)
     }
@@ -330,7 +330,7 @@ impl AsyncElectrumTask {
     /// Continuously drains the `command_queue` and writes requests to the socket.
     /// Sleeps briefly to avoid busy-waiting when idle.
     pub async fn run_forever(&mut self) -> Result<()> {
-        log::info!("[ASYNC] Running forever...");
+        log::info!("[ADAPTER] Running forever...");
         loop {
             self.flush_outgoing().await?;
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -397,7 +397,7 @@ impl AsyncElectrumTask {
 
     async fn send(&mut self, v: &Value) -> Result<()> {
         let s = v.to_string();
-        log::trace!("[SEND] payload:{}", s);
+        log::trace!("[ADAPTER] Send payload:{}", s);
         self.writer.write_all(s.as_bytes()).await?;
         self.writer.write_all(b"\n").await?;
         self.writer.flush().await?;
@@ -411,7 +411,7 @@ impl AsyncElectrumTask {
 
 async fn process_message(line: &str, state: &Arc<Mutex<SharedState>>) -> Result<()> {
     let msg: Value = serde_json::from_str(line)?;
-    log::trace!("[HISTORY] process_message line:{}", line.trim());
+    log::trace!("[ADAPTER] process_message line:{}", line.trim());
     
     // ============================================================
     // Notifications (no id)
@@ -431,7 +431,7 @@ async fn process_message(line: &str, state: &Arc<Mutex<SharedState>>) -> Result<
                 bytes.reverse();
                 let hash = sha256::Hash::from_slice(&bytes)?;
 
-                log::debug!("[HISTORY] scripthash notification for {}", hash);
+                log::debug!("[ADAPTER] scripthash notification for {}", hash);
 
                 // Notify driver that something changed. 
                 // Driver will likely call `request_history` next.
@@ -502,13 +502,13 @@ async fn process_message(line: &str, state: &Arc<Mutex<SharedState>>) -> Result<
                     if *rem == 0 {
                         s.remaining_txs.remove(&hash);
                         s.ready.push_back(hash);
-                        log::info!("[HISTORY] history complete for {} ({} txs)", hash, s.history_cache.get(&hash).map(|v| v.len()).unwrap_or(0));
+                        log::info!("[ADAPTER] history complete for {} ({} txs)", hash, s.history_cache.get(&hash).map(|v| v.len()).unwrap_or(0));
                     }
                 }
             }
         }
     } else {
-        log::trace!("[ASYNC] response with unknown id {} (might be a subscribe response)", id);
+        log::debug!("[ADAPTER] response with unknown id {} (might be a subscribe response)", id);
     }
 
     Ok(())

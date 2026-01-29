@@ -71,7 +71,7 @@ where
     fn check_initial_sync_complete(&mut self) {
         // If we have a callback registered AND the pending set is empty...
         if self.on_initial_sync.is_some() && self.pending_initial_syncs.is_empty() {
-            self.info("initial engine bootstrap finished (all responses received)");
+            self.info("[SYNC] initial engine bootstrap finished (all responses received)");
             if let Some(cb) = self.on_initial_sync.take() {
                 cb();
             }
@@ -89,7 +89,7 @@ where
     /// 2. Enters a loop polling the client for changes.
     /// 3. Handles the **"Fetch-or-Request"** logic to prevent zero-balance bugs.
     pub fn run_forever(mut self) -> ! {
-        self.info("starting driver");
+        self.info("[DRIVER] Starting...");
 
         // 1. Bootstrap: Tell the engine we are connected so it generates initial subscriptions.
         self.process_engine(EngineEvent::Connected);
@@ -106,7 +106,7 @@ where
         loop {
             // POLL CLIENT for notification (status changed) or download completion.
             if let Some(hash) = self.client.poll_scripthash_changed() {
-                self.trace(&format!("event: ScriptHashChanged({})", hash));
+                self.debug(&format!("[LOOP] Event: ScriptHashChanged({})", hash));
                 
                 // === OPTION B FIX (The "Fetch-or-Request" Pattern) ===
                 // Problem: A "changed" notification arrives before we have the transaction history.
@@ -116,7 +116,7 @@ where
                 match self.client.fetch_history_txs(hash) {
                     Some(txs) => {
                         // CASE A: Cache Hit (Data Ready)
-                        self.debug(&format!("[DRIVER] Cache hit for {}, processing {} txs", hash, txs.len()));
+                        self.info(&format!("[LOOP] FetchHistory: Cache Hit for {}, processing {} txs", hash, txs.len()));
                         
                         // 1. Update Wallet
                         self.process_engine(EngineEvent::ScriptHashHistory { hash, txs });
@@ -127,7 +127,7 @@ where
                         // LOG PROGRESS
                         if self.on_initial_sync.is_some() {
                             let remaining = self.pending_initial_syncs.len();
-                            self.info(&format!("Initial Sync Progress: {} pending", remaining));
+                            self.info(&format!("[LOOP] FetchHistory: Initial sync progress > {} pending", remaining));
                         }
 
                         // 3. Check if we are done with the initial load
@@ -140,10 +140,10 @@ where
                         // Result: When history arrives later, `poll_scripthash_changed` fires again, 
                         // and we will hit CASE A.
                         if self.pending_initial_syncs.contains(&hash) {
-                            self.trace(&format!("[DRIVER] Ignoring cache miss for {} (already pending)", hash));
+                            self.trace(&format!("[LOOP] NoHistory: Ignoring cache miss for {} (already pending)", hash));
                         } else {
                             // Only request if it's a TRULY new event (post-bootstrap)
-                            self.trace(&format!("[DRIVER] Cache miss for {}, requesting history", hash));
+                            self.trace(&format!("[LOOP] NoHistory: Cache miss for {}, requesting history", hash));
                             self.client.request_history(hash);
                         }
                     }
@@ -161,7 +161,7 @@ where
         let mut queue = vec![event];
 
         while let Some(ev) = queue.pop() {
-            self.trace(&format!("engine.handle_event({:?})", ev));
+            self.debug(&format!("[RUNTIME] EngineEvent: HandleEvent({:?})", ev));
 
             // PURE LOGIC STEP: Engine decides what to do
             let cmds = self.engine.handle_event(ev);
@@ -175,23 +175,23 @@ where
 
     /// Executes a single command emitted by the engine.
     fn execute_command(&mut self, cmd: EngineCommand, _queue: &mut Vec<EngineEvent>) {
-        self.trace(&format!("{:>8}us cmd: {:?}", self.t0.elapsed().as_micros(), cmd));
+        self.trace(&format!("[RUNTIME] EngineCommand: {:?} ({:>8}us)", cmd, self.t0.elapsed().as_micros()));
         match cmd {
             EngineCommand::Subscribe(hash) => {
-                self.trace(&format!("cmd: Subscribe({})", hash));
+                self.trace(&format!("[RUNTIME] EngineCommand cmd: Subscribe({})", hash));
 
                 // We need the script to subscribe (Electrum protocol requirement for some servers, 
                 // or useful for re-registration).
                 if let Some(script) = self.engine.script_for_hash(&hash) {
                     self.client.register_script(script, hash);
                 } else {
-                    log::error!("[DRIVER] No script for hash {}", hash);
+                    log::error!("[RUNTIME] EngineCommand: No script for hash {}", hash);
                 }
             }
 
             EngineCommand::FetchHistory(hash) => {
                 // Explicit request for history (used during bootstrap).
-                self.trace(&format!("cmd: FetchHistory({})", hash));
+                self.trace(&format!("[RUNTIME] EngineCommand: FetchHistory({})", hash));
                 // If we are in the bootstrap phase (callback exists),
                 // track this hash as "pending download".
                 if self.on_initial_sync.is_some() {
@@ -202,10 +202,10 @@ where
             }
 
             EngineCommand::ApplyTransactions { script: _, txs } => {
-                self.trace(&format!("[ENGINE] cmd: ApplyTransactions({} txs)", txs.len()));
+                self.trace(&format!("[RUNTIME] EngineCommand: ApplyTransactions({} txs)", txs.len()));
 
                 if txs.is_empty() {
-                    self.trace("[ENGINE] no txs to apply");
+                    self.trace("[RUNTIME] EngineCommand: no txs to apply");
                     return;
                 }
 
@@ -213,18 +213,18 @@ where
                 let mut update = bdk_wallet::Update::default();
 
                 for tx in txs {
-                    self.trace(&format!("[WALLET] apply tx {}", tx.compute_txid()));
+                    self.trace(&format!("[RUNTIME] EngineCommand: Wallet apply tx {}", tx.compute_txid()));
                     update.tx_update.txs.push(Arc::new(tx));
                 }
 
-                log::trace!(
-                    "[WALLET] applying {} txs",
+                log::debug!(
+                    "[RUNTIME] EngineCommand: Wallet applying {} txs",
                     update.tx_update.txs.len()
                 );
                 let mut w = self.wallet.lock().unwrap();
                 let r = w.apply_update(update);
-                log::trace!(
-                    "[WALLET] apply_update result = {:?}",
+                log::debug!(
+                    "[RUNTIME] EngineCommand: Wallet apply_update result = {:?}",
                     r
                 );
             }
@@ -258,14 +258,14 @@ where
     }
 
     fn info(&self, msg: &str) {
-        log::info!("[DRIVER] {:>8}us: {}", self.t(), msg);
+        log::info!("{} ({:>8}us)", msg, self.t());
     }
 
     fn debug(&self, msg: &str) {
-        log::debug!("[DRIVER] {:>8}us: {}", self.t(), msg);
+        log::debug!("{} ({:>8}us)", msg, self.t());
     }
     fn trace(&self, msg: &str) {
-        log::trace!("[DRIVER] {:>8}us: {}", self.t(), msg);
+        log::trace!("{} ({:>8}us)", msg, self.t());
     }
 }
 

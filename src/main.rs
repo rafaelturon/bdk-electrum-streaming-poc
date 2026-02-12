@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
-use bdk_wallet::bitcoin::Network;
+use bdk_wallet::{bitcoin::Network, KeychainKind};
 use bdk_electrum::electrum_client;
 
 use bdk_electrum_streaming_poc::setup_wallet;
@@ -159,11 +159,14 @@ fn run_streaming(args: &Args) -> Result<SyncResult> {
     log::debug!("[STREAMING] Descriptor loaded");
 
     log::info!("[STREAMING] Building script tracker...");
-    let mut tracker = DerivedSpkTracker::<String>::new(20);
-    tracker.insert_descriptor("external".to_string(), external, 0);
-    if let Some(change_desc) = change {
-        tracker.insert_descriptor("internal".to_string(), change_desc, 0);
-    }
+    let lookahead = 50;
+    let mut tracker = DerivedSpkTracker::<String>::new(lookahead);
+    tracker.insert_descriptor(KeychainKind::External.to_string(), external, 0);
+    let change_desc = change.expect("CRITICAL: Change descriptor is missing!");
+    tracker.insert_descriptor(KeychainKind::Internal.to_string(), change_desc, 0);
+    // if let Some(change_desc) = change {
+    //     tracker.insert_descriptor("internal".to_string(), change_desc, 0);
+    // }
 
     log::info!("[STREAMING] Building streaming engine...");
     let engine = SyncEngine::new(tracker);
@@ -204,7 +207,9 @@ fn run_streaming(args: &Args) -> Result<SyncResult> {
     let dt = stats.elapsed().unwrap();
 
     let balance = {
+        log::debug!("[STREAMING] Acquiring wallet lock...");
         let w = wallet.lock().unwrap();
+        log::debug!("[STREAMING] Wallet lock acquired.");
         w.balance().total().to_sat()
     };
 

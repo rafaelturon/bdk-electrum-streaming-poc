@@ -1612,3 +1612,65 @@ The codebase is now clean, documented, and easy to run. The internal plumbing of
 
 ---
 
+Based on the `changeset.patch` provided, here is the journal entry for **Day 21** and the Git commit message.
+
+---
+
+## 📅 2026-01-31 | Day 17: The Case of the Missing Balance
+
+### Objective
+
+The system was running perfectly—logs showed connections, subscriptions, and transaction downloads. But at the end of the benchmark, the wallet often reported a **zero balance**.
+
+Today was a debugging session to align the BDK internal state with the raw data coming from our Streaming Engine. I discovered two critical integration bugs where the "Brain" (Engine) and the "Memory" (BDK) were out of sync.
+
+### 1. The Temporal Context Bug (`Orchestrator`)
+
+I found that simply pushing a raw `Transaction` into BDK’s `TxGraph` is not enough. Without a Block Anchor (height) or a "Seen At" timestamp, BDK treats the transaction as existing in a vacuum—often ignoring it for balance calculations because it lacks temporal sorting.
+
+I updated the `SyncOrchestrator` to attach a `seen_at` timestamp (current system time) to every transaction downloaded via the stream.
+
+```rust
+// FIX: Give BDK a reason to count this transaction
+let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+update.tx_update.seen_ats.insert((txid, now));
+
+```
+
+### 2. The Lookahead Mismatch (`Persistence`)
+
+The Streaming Engine was configured to track 50 addresses ahead, but the persisted BDK wallet was only initializing with a default (or previously saved) lookahead of 20.
+This meant that if a change output landed at Index 45:
+
+1. The **Engine** saw it (Lookahead 50).
+2. The **BDK Wallet** ignored it (Keychain only revealed to 20).
+
+I bumped the global lookahead to `50` and enforced a `reveal_addresses_to(50)` call immediately upon wallet load. This forces the BDK keychain to "catch up" to the Streaming Tracker.
+
+### 3. Type Safety Refactor
+
+I removed the hardcoded strings `"external"` and `"internal"` in the main setup. I switched to using `bdk_wallet::KeychainKind`, ensuring the tracker and the wallet always agree on keychain identifiers.
+
+### Architecture Diagram: The Data Flow Fix
+
+```mermaid
+graph TD
+    Net[Network] -->|Raw Tx| Orc[Orchestrator]
+    Orc -->|Attach Timestamp| Upd[BDK Update]
+    Upd -->|Apply| Graph[TxGraph]
+    
+    subgraph "Before Fix"
+        Graph -->|No Anchor/Time| Ignored[Transaction Ignored]
+    end
+    
+    subgraph "After Fix"
+        Graph -->|Has 'Seen At'| Balance[Balance Calculated]
+    end
+
+```
+
+### Conclusion
+
+With these fixes, the "Time-to-Balance" benchmark finally matches reality. The wallet now consistently reports the correct balance immediately after the initial sync burst.
+
+---

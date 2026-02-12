@@ -212,8 +212,19 @@ where
                 // Prepare BDK update
                 let mut update = bdk_wallet::Update::default();
 
+                // FIX: Mark every transaction with a `seen_at` timestamp.
+                // Without this (or an anchor/block-height), BDK's tx graph has
+                // no temporal context and will NOT count the outputs in the
+                // balance — even if the scripts match the wallet's keychain.
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+
                 for tx in txs {
-                    self.trace(&format!("[RUNTIME] EngineCommand: Wallet apply tx {}", tx.compute_txid()));
+                    let txid = tx.compute_txid();
+                    self.trace(&format!("[RUNTIME] EngineCommand: Wallet apply tx {}", txid));
+                    update.tx_update.seen_ats.insert((txid, now));
                     update.tx_update.txs.push(Arc::new(tx));
                 }
 

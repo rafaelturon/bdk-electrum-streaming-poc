@@ -212,20 +212,54 @@ where
                 // Prepare BDK update
                 let mut update = bdk_wallet::Update::default();
 
-                // FIX: Mark every transaction with a `seen_at` timestamp.
-                // Without this (or an anchor/block-height), BDK's tx graph has
-                // no temporal context and will NOT count the outputs in the
-                // balance — even if the scripts match the wallet's keychain.
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_secs();
 
-                for tx in txs {
-                    let txid = tx.compute_txid();
-                    self.trace(&format!("[RUNTIME] EngineCommand: Wallet apply tx {}", txid));
-                    update.tx_update.seen_ats.insert((txid, now));
-                    update.tx_update.txs.push(Arc::new(tx));
+                for htx in txs {
+                    let txid = htx.tx.compute_txid();
+
+                    if htx.height > 0 {
+                        // CONFIRMED: Build a proper ConfirmationBlockTime anchor.
+                        //
+                        // The adapter pre-fetched the block header alongside the
+                        // transaction history, so it should be in the cache.
+                        let h = htx.height as u32;
+                        if let Some(header) = self.client.get_cached_header(h) {
+                            let anchor = bdk_wallet::chain::ConfirmationBlockTime {
+                                block_id: bdk_wallet::chain::BlockId {
+                                    height: h,
+                                    hash: header.block_hash(),
+                                },
+                                confirmation_time: header.time as u64,
+                            };
+                            self.trace(&format!(
+                                "[RUNTIME] Wallet apply tx {} anchored at height {}",
+                                txid, h
+                            ));
+                            update.tx_update.anchors.insert((anchor, txid));
+                        } else {
+                            // Fallback: header not cached yet (shouldn't happen
+                            // if adapter pipeline is correct). Use seen_at so the
+                            // tx is still counted.
+                            log::warn!(
+                                "[RUNTIME] Missing block header for height {}; \
+                                 falling back to seen_at for tx {}",
+                                h, txid
+                            );
+                            update.tx_update.seen_ats.insert((txid, now));
+                        }
+                    } else {
+                        // UNCONFIRMED (mempool): Use seen_at timestamp.
+                        self.trace(&format!(
+                            "[RUNTIME] Wallet apply tx {} (unconfirmed, seen_at={})",
+                            txid, now
+                        ));
+                        update.tx_update.seen_ats.insert((txid, now));
+                    }
+
+                    update.tx_update.txs.push(Arc::new(htx.tx));
                 }
 
                 log::debug!(

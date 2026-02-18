@@ -1,9 +1,10 @@
 use std::collections::{BTreeSet, HashMap, VecDeque};
 
 use bitcoin::hashes::sha256;
-use bitcoin::{ScriptBuf, Transaction};
+use bitcoin::{block, ScriptBuf, Transaction};
 
 use crate::streaming::electrum::ElectrumApi;
+use crate::streaming::engine::types::HistoryTx;
 
 /// Pure in-memory mock Electrum client for tests
 pub struct MockElectrumClient {
@@ -55,13 +56,21 @@ impl ElectrumApi for MockElectrumClient {
         item
     }
 
-    fn fetch_history_txs(&mut self, hash: sha256::Hash) -> Option<Vec<Transaction>> {
-        self.histories.get(&hash).cloned()
+    fn fetch_history_txs(&mut self, hash: sha256::Hash) -> Option<Vec<HistoryTx>> {
+        self.histories.get(&hash).cloned().map(|txs| {
+            txs.into_iter()
+                .map(|tx| HistoryTx { tx, height: 0 }) // Mock: treat all as unconfirmed
+                .collect()
+        })
     }
 
     fn request_history(&mut self, hash: sha256::Hash) {
         println!("[MOCK] request_history called for {}", hash); // DEBUG LOG
         // Simulate async completion
         self.notifications.push_back(hash);
+    }
+
+    fn get_cached_header(&self, _height: u32) -> Option<block::Header> {
+        None // Mock doesn't need real block headers
     }
 }

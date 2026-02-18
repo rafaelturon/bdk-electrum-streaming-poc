@@ -2,7 +2,7 @@ use bitcoin::hashes::sha256;
 use std::time::Instant;
 use bitcoin::Txid;
 use crate::streaming::engine::state::EngineState;
-use crate::streaming::engine::types::EngineCommand;
+use crate::streaming::engine::types::{EngineCommand, HistoryTx};
 
 pub fn on_connected<K: Ord + Clone>(state: &mut EngineState<K>) -> Vec<EngineCommand> {
     log::info!("[ENGINE] on_connected: enumerating scripts");
@@ -39,7 +39,7 @@ pub fn on_scripthash_changed<K>(_: &mut EngineState<K>, hash: sha256::Hash) -> V
 pub fn on_scripthash_history<K: Ord + Clone>(
     state: &mut EngineState<K>,
     hash: sha256::Hash,
-    txs: Vec<bitcoin::Transaction>,
+    txs: Vec<HistoryTx>,                  // CHANGED: was Vec<Transaction>
 ) -> Vec<EngineCommand> {
     // BENCHMARK HOOK — FIRST REAL DATA
     if state.first_history_seen_at.is_none() && !txs.is_empty() {
@@ -73,9 +73,10 @@ pub fn on_scripthash_history<K: Ord + Clone>(
             now.duration_since(state.start_time)
         );
     }    
-    let txids: Vec<Txid> = txs.iter().map(|t| t.compute_txid()).collect();
-    state.histories.insert(hash, txids.clone());
 
+    // CHANGED: Extract txids from HistoryTx for the histories map
+    let txids: Vec<Txid> = txs.iter().map(|ht| ht.tx.compute_txid()).collect();
+    state.histories.insert(hash, txids.clone());
 
     if was_empty && !is_empty {
         if let Some((keychain, index)) = state.spk_index_by_hash.get(&hash).cloned() {
@@ -101,7 +102,7 @@ pub fn on_scripthash_history<K: Ord + Clone>(
     let script = state.script_by_hash.get(&hash).cloned().unwrap();
     cmds.push(EngineCommand::ApplyTransactions {
         script,
-        txs,
+        txs,                              // CHANGED: now Vec<HistoryTx>
     });
 
     cmds

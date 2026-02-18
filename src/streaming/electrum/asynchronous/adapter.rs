@@ -18,16 +18,17 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
 use tokio::net::TcpStream;
 use tokio_native_tls::{TlsConnector, TlsStream};
 
-use bitcoin::{ScriptBuf, Transaction, Txid};
+use bitcoin::{block, ScriptBuf, Transaction, Txid};
 use bitcoin::hashes::{sha256, Hash};
 use bitcoin::consensus::Decodable;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::net::{SocketAddr, ToSocketAddrs};
 
 use crate::streaming::electrum::api::ElectrumApi;
+use crate::streaming::engine::types::HistoryTx;
 
 // =====================================================================
 // Utils
@@ -70,14 +71,27 @@ pub enum InternalCommand {
     FetchTransaction {
         txid: Txid,
         related_hash: sha256::Hash,
-    }
+        height: i32,                      // NEW: confirmation height from get_history
+    },
+    /// Request a block header by height (for building anchors).
+    FetchBlockHeader {                    // NEW
+        height: u32,
+        related_hash: sha256::Hash,
+    },
 }
 
 /// Tracks the type of an in-flight JSON-RPC request to handle the response correctly.
 #[derive(Debug)]
 pub enum RequestType {
     History(sha256::Hash),
-    Transaction(sha256::Hash),
+    Transaction {
+        related_hash: sha256::Hash,
+        height: i32,                      // NEW: carried from history response
+    },
+    BlockHeader {                         // NEW
+        height: u32,
+        related_hash: sha256::Hash,
+    },
 }
 
 // =====================================================================
@@ -92,7 +106,10 @@ struct SharedState {
     ready: VecDeque<sha256::Hash>,
 
     /// Temporary storage for downloaded transaction histories.
-    history_cache: HashMap<sha256::Hash, Vec<Transaction>>,
+    history_cache: HashMap<sha256::Hash, Vec<HistoryTx>>,   // CHANGED: was Vec<Transaction>
+
+    /// Cache of block headers by height (used by orchestrator for anchors).
+    block_header_cache: HashMap<u32, block::Header>,        // NEW
 
     // --- Input (Driver -> Network) ---
     /// Queue of commands waiting to be sent to the Electrum server.
@@ -105,9 +122,36 @@ struct SharedState {
     /// Counter for transactions remaining to be downloaded for a specific history request.
     /// Key: ScriptHash, Value: Count of txs still pending.
     remaining_txs: HashMap<sha256::Hash, usize>,
+
+    /// Counter for block headers remaining to be downloaded for a specific history request.
+    /// Key: ScriptHash, Value: Count of unique heights still pending.
+    remaining_headers: HashMap<sha256::Hash, usize>,        // NEW
+
+    /// Tracks which block heights have already been requested (to avoid duplicates).
+    headers_in_flight: HashSet<u32>,                        // NEW
     
     /// Flag indicating if the TLS connection handshake is complete.
     connected: bool,
+}
+
+impl SharedState {
+    /// Checks if all data (txs + headers) is ready for a given scripthash.
+    /// If so, signals the driver via the `ready` queue.
+    fn check_history_complete(&mut self, hash: sha256::Hash) {
+        let txs_done = self.remaining_txs.get(&hash).copied().unwrap_or(0) == 0;
+        let hdrs_done = self.remaining_headers.get(&hash).copied().unwrap_or(0) == 0;
+
+        if txs_done && hdrs_done {
+            self.remaining_txs.remove(&hash);
+            self.remaining_headers.remove(&hash);
+            self.ready.push_back(hash);
+            log::info!(
+                "[ADAPTER] history complete for {} ({} txs)",
+                hash,
+                self.history_cache.get(&hash).map(|v| v.len()).unwrap_or(0)
+            );
+        }
+    }
 }
 
 // =====================================================================
@@ -131,9 +175,12 @@ impl ElectrumAdapter {
         let state = Arc::new(Mutex::new(SharedState {
             ready: VecDeque::new(),
             history_cache: HashMap::new(),
+            block_header_cache: HashMap::new(),     // NEW
             command_queue: VecDeque::new(),
             inflight_requests: HashMap::new(),
             remaining_txs: HashMap::new(),
+            remaining_headers: HashMap::new(),      // NEW
+            headers_in_flight: HashSet::new(),      // NEW
             connected: false,
         }));
 
@@ -173,17 +220,10 @@ impl ElectrumAdapter {
 
 impl ElectrumApi for ElectrumAdapter {
     /// Queues a subscription request for a script.
-    ///
-    /// This immediately queues both `Subscribe` and `FetchHistory` commands
-    /// to ensure the client state is consistent from the start.
     fn register_script(&mut self, script: ScriptBuf, hash: sha256::Hash) {
         log::trace!("[ADAPTER] register_script({})", hash);
         let mut s = self.state.lock().unwrap();
-
-        // Push commands to the single queue
         s.command_queue.push_back(InternalCommand::Subscribe { hash, script });
-        //s.command_queue.push_back(InternalCommand::FetchHistory { hash });
-
         log::trace!(
             "[ADAPTER] queued subscribe for {} (queue len={})",
             hash,
@@ -201,15 +241,14 @@ impl ElectrumApi for ElectrumAdapter {
     /// Retrieves the downloaded transaction history for a hash.
     ///
     /// # Return Behavior (Crucial for Option B Logic)
-    /// * Returns `Some(Vec<Tx>)` if the history is **ready** and in the cache.
-    /// * Returns `None` if the history is **pending** (not yet downloaded).
+    /// * Returns `Some(Vec<HistoryTx>)` if the history AND its block headers are **ready**.
+    /// * Returns `None` if still **pending**.
     ///
     /// **Note:** This operation is destructive (it removes the item from the cache).
-    fn fetch_history_txs(&mut self, hash: sha256::Hash) -> Option<Vec<Transaction>> {
+    fn fetch_history_txs(&mut self, hash: sha256::Hash) -> Option<Vec<HistoryTx>> {
         let mut s = self.state.lock().unwrap();
         let txs = s.history_cache.remove(&hash);
         
-        // FIX: Handle Option explicitly for logging
         if let Some(ref t) = txs {
             log::trace!("[ADAPTER] fetch_history_txs({}) -> found {} txs", hash, t.len());
         } else {
@@ -220,8 +259,6 @@ impl ElectrumApi for ElectrumAdapter {
     }
 
     /// Checks if any script hash has new activity or completed syncing.
-    ///
-    /// Returns `Some(hash)` if the driver needs to wake up and process `hash`.
     fn poll_scripthash_changed(&mut self) -> Option<sha256::Hash> {
         let mut s = self.state.lock().unwrap();
         let item = s.ready.pop_front();
@@ -229,6 +266,12 @@ impl ElectrumApi for ElectrumAdapter {
              log::trace!("[ENGINE] poll_scripthash_changed -> {:?}", h);
         }
         item
+    }
+
+    /// NEW: Retrieves a cached block header by height.
+    fn get_cached_header(&self, height: u32) -> Option<block::Header> {
+        let s = self.state.lock().unwrap();
+        s.block_header_cache.get(&height).copied()
     }
 }
 
@@ -269,11 +312,7 @@ impl AsyncElectrumTask {
         let (r, w) = tokio::io::split(tls);
         let reader_state = state.clone();
 
-        // ===============================
         // Dedicated reader task
-        // ===============================
-        // This task runs independently, reading lines from the socket
-        // and dispatching them to `process_message`.
         tokio::spawn(async move {
             let mut reader = BufReader::new(r);
             loop {
@@ -326,9 +365,6 @@ impl AsyncElectrumTask {
     }
 
     /// The main write loop.
-    ///
-    /// Continuously drains the `command_queue` and writes requests to the socket.
-    /// Sleeps briefly to avoid busy-waiting when idle.
     pub async fn run_forever(&mut self) -> Result<()> {
         log::info!("[ADAPTER] Running forever...");
         loop {
@@ -338,7 +374,6 @@ impl AsyncElectrumTask {
     }
 
     async fn flush_outgoing(&mut self) -> Result<()> {
-        // Drain the single command queue
         let commands: Vec<InternalCommand> = {
             let mut s = self.state.lock().unwrap();
             s.command_queue.drain(..).collect()
@@ -348,8 +383,6 @@ impl AsyncElectrumTask {
             match cmd {
                 InternalCommand::Subscribe { hash: _, script } => {
                     let sh = electrum_scripthash(script.as_bytes());
-                    // Note: We don't track the ID for subscriptions as we rely on 
-                    // the asynchronous notification ("blockchain.scripthash.subscribe")
                     self.send(&json!({
                         "jsonrpc": "2.0",
                         "id": next_id(),
@@ -375,11 +408,14 @@ impl AsyncElectrumTask {
                         "params": [sh]
                     })).await?;
                 }
-                InternalCommand::FetchTransaction { txid, related_hash } => {
+                InternalCommand::FetchTransaction { txid, related_hash, height } => {
                     let id = next_id();
                     {
                         let mut s = self.state.lock().unwrap();
-                        s.inflight_requests.insert(id, RequestType::Transaction(related_hash));
+                        s.inflight_requests.insert(id, RequestType::Transaction {
+                            related_hash,
+                            height,             // CHANGED: carry height
+                        });
                     }
 
                     self.send(&json!({
@@ -387,6 +423,24 @@ impl AsyncElectrumTask {
                         "id": id,
                         "method": "blockchain.transaction.get",
                         "params": [txid.to_string(), false]
+                    })).await?;
+                }
+                // NEW: Fetch block header for a confirmed transaction's height
+                InternalCommand::FetchBlockHeader { height, related_hash } => {
+                    let id = next_id();
+                    {
+                        let mut s = self.state.lock().unwrap();
+                        s.inflight_requests.insert(id, RequestType::BlockHeader {
+                            height,
+                            related_hash,
+                        });
+                    }
+
+                    self.send(&json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "method": "blockchain.block.header",
+                        "params": [height]
                     })).await?;
                 }
             }
@@ -433,8 +487,6 @@ async fn process_message(line: &str, state: &Arc<Mutex<SharedState>>) -> Result<
 
                 log::debug!("[ADAPTER] scripthash notification for {}", hash);
 
-                // Notify driver that something changed. 
-                // Driver will likely call `request_history` next.
                 let mut s = state.lock().unwrap();
                 s.ready.push_back(hash);
             }
@@ -457,7 +509,7 @@ async fn process_message(line: &str, state: &Arc<Mutex<SharedState>>) -> Result<
     if let Some(req) = request_type {
         match req {
             RequestType::History(hash) => {
-                 if let Some(result) = msg.get("result") {
+                if let Some(result) = msg.get("result") {
                     let arr = result.as_array().ok_or_else(|| anyhow::anyhow!("history not array"))?;
                     
                     let mut s = state.lock().unwrap();
@@ -466,25 +518,56 @@ async fn process_message(line: &str, state: &Arc<Mutex<SharedState>>) -> Result<
                     if arr.is_empty() {
                         // Empty history, ready immediately
                         s.history_cache.insert(hash, vec![]);
-                        s.ready.push_back(hash);
+                        s.remaining_headers.insert(hash, 0);
+                        s.check_history_complete(hash);
                     } else {
-                        // Queue up transaction fetches
+                        // CHANGED: Collect unique confirmed heights that need headers
+                        let mut needed_heights: HashSet<u32> = HashSet::new();
+
                         for item in arr {
                             let txid_str = item["tx_hash"]
                                 .as_str()
                                 .ok_or_else(|| anyhow::anyhow!("missing tx_hash"))?;
                             let txid: Txid = txid_str.parse()?;
-                            
-                            // Push back to the command queue to be processed by the writer task
+
+                            // NEW: Extract height from history entry
+                            let height = item["height"]
+                                .as_i64()
+                                .unwrap_or(0) as i32;
+
+                            // Queue tx fetch with its height
                             s.command_queue.push_back(InternalCommand::FetchTransaction { 
                                 txid, 
-                                related_hash: hash 
+                                related_hash: hash,
+                                height,             // NEW: carry height
+                            });
+
+                            // Track unique confirmed heights that need headers
+                            if height > 0 {
+                                let h = height as u32;
+                                if !s.block_header_cache.contains_key(&h)
+                                    && !s.headers_in_flight.contains(&h)
+                                {
+                                    needed_heights.insert(h);
+                                }
+                            }
+                        }
+
+                        // Queue header fetches for unique new heights
+                        s.remaining_headers.insert(hash, needed_heights.len());
+                        for h in needed_heights {
+                            s.headers_in_flight.insert(h);
+                            s.command_queue.push_back(InternalCommand::FetchBlockHeader {
+                                height: h,
+                                related_hash: hash,
                             });
                         }
                     }
-                 }
+                }
             }
-            RequestType::Transaction(hash) => {
+
+            // CHANGED: Now carries height alongside the transaction
+            RequestType::Transaction { related_hash, height } => {
                 if let Some(result) = msg.get("result") {
                     let hex_str = result.as_str().ok_or_else(|| anyhow::anyhow!("tx result is not a string"))?;
                     let tx_bytes = hex::decode(hex_str)?;
@@ -492,17 +575,49 @@ async fn process_message(line: &str, state: &Arc<Mutex<SharedState>>) -> Result<
 
                     let mut s = state.lock().unwrap();
                     
-                    // Add tx to the pending list for this scripthash
-                    s.history_cache.entry(hash).or_default().push(tx);
+                    // Store as HistoryTx with the height from the original get_history
+                    s.history_cache.entry(related_hash).or_default().push(HistoryTx {
+                        tx,
+                        height,
+                    });
                     
-                    let rem = s.remaining_txs.get_mut(&hash).unwrap();
+                    let rem = s.remaining_txs.get_mut(&related_hash).unwrap();
                     *rem -= 1;
 
-                    // If this was the last tx, the history is complete.
+                    // Check if BOTH txs and headers are done
                     if *rem == 0 {
-                        s.remaining_txs.remove(&hash);
-                        s.ready.push_back(hash);
-                        log::info!("[ADAPTER] history complete for {} ({} txs)", hash, s.history_cache.get(&hash).map(|v| v.len()).unwrap_or(0));
+                        s.check_history_complete(related_hash);
+                    }
+                }
+            }
+
+            // NEW: Block header response
+            RequestType::BlockHeader { height, related_hash } => {
+                if let Some(result) = msg.get("result") {
+                    let hex_str = result.as_str().ok_or_else(|| anyhow::anyhow!("header result is not a string"))?;
+                    let header_bytes = hex::decode(hex_str)?;
+                    let header = block::Header::consensus_decode(&mut &header_bytes[..])?;
+
+                    log::debug!(
+                        "[ADAPTER] block header for height {} -> hash={}",
+                        height,
+                        header.block_hash()
+                    );
+
+                    let mut s = state.lock().unwrap();
+                    s.block_header_cache.insert(height, header);
+                    s.headers_in_flight.remove(&height);
+
+                    // Decrement pending header count for this scripthash
+                    if let Some(rem) = s.remaining_headers.get_mut(&related_hash) {
+                        *rem = rem.saturating_sub(1);
+                    }
+
+                    // Check if BOTH txs and headers are done
+                    let txs_done = s.remaining_txs.get(&related_hash).copied().unwrap_or(0) == 0;
+                    let hdrs_done = s.remaining_headers.get(&related_hash).copied().unwrap_or(0) == 0;
+                    if txs_done && hdrs_done {
+                        s.check_history_complete(related_hash);
                     }
                 }
             }

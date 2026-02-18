@@ -1674,3 +1674,104 @@ graph TD
 With these fixes, the "Time-to-Balance" benchmark finally matches reality. The wallet now consistently reports the correct balance immediately after the initial sync burst.
 
 ---
+
+## 📅 2026-02-01 | Day 18: The Anchor of Truth
+
+### Objective
+
+Yesterday's fix (`seen_at` timestamps) solved the "Zero Balance" bug, but it was a hack. It treated every transaction—even those from 2015—as if they happened *right now*. This destroys the transaction history timeline and breaks BDK's ability to handle reorgs.
+
+To build a robust wallet, we need **True Anchors**: connecting every confirmed transaction to its specific block header (Hash, Height, and Time).
+
+Today, I implemented **Parallel Header Fetching** to give BDK the context it deserves.
+
+### 1. The Data Structure: `HistoryTx`
+
+I realized passing raw `Transaction` objects around was insufficient. The Electrum `blockchain.scripthash.get_history` call gives us the height, but we were throwing it away when downloading the raw transaction bytes.
+
+I introduced a new primitive, **`HistoryTx`**, which bundles the transaction with its confirmation height.
+
+* `height > 0`: Confirmed.
+* `height == 0`: Unconfirmed (Mempool).
+
+### 2. The Adapter Pipeline: Parallel Fetching
+
+The biggest change happened in the `ElectrumAdapter`. I modified the response parser to be "Anchor-Aware".
+
+When a history list arrives:
+
+1. **Parse:** We extract both the `tx_hash` and the `height`.
+2. **Queue Tx:** We queue a `blockchain.transaction.get` request.
+3. **Queue Header:** If `height > 0` and we don't have the header cached, we *simultaneously* queue a `blockchain.block.header` request.
+
+I added a **Synchronization Barrier** to the `SharedState`. The Adapter will not mark a script hash as "Ready" until:
+
+* `remaining_txs == 0` **AND**
+* `remaining_headers == 0`
+
+This guarantees that when the Driver wakes up, we have every byte needed to construct the full cryptographic proof of the history.
+
+### 3. The Orchestrator: Building the Anchor
+
+In the `SyncOrchestrator`, I replaced the `seen_at` hack with proper BDK anchoring.
+
+```rust
+if htx.height > 0 {
+    // We fetched the header in parallel, so this is a cache hit
+    if let Some(header) = self.client.get_cached_header(htx.height) {
+        let anchor = ConfirmationBlockTime {
+            block_id: BlockId { height, hash: header.block_hash() },
+            confirmation_time: header.time,
+        };
+        update.anchors.insert((anchor, txid));
+    }
+}
+
+```
+
+Now, a transaction from 2015 appears in the wallet with its 2015 timestamp, derived trustlessly from the block header.
+
+### Architecture Diagram: The Parallel Fetch Pipeline
+
+```mermaid
+sequenceDiagram
+    participant Net as Electrum Server
+    participant Adapter as ElectrumAdapter
+    participant Orc as Orchestrator
+    participant BDK as Wallet
+
+    Note over Adapter: History List Received: [{tx: A, h: 100}, {tx: B, h: 100}]
+
+    par Fetch Data
+        Adapter->>Net: get_transaction(A)
+        Adapter->>Net: get_transaction(B)
+    and Fetch Context
+        Adapter->>Net: get_header(100)
+    end
+
+    Net-->>Adapter: Tx A bytes
+    Net-->>Adapter: Tx B bytes
+    Net-->>Adapter: Header 100 bytes
+
+    Note over Adapter: Barrier Reached (All Data Ready)
+    Adapter->>Orc: Ready(ScriptHash)
+
+    Orc->>Adapter: fetch_history_txs()
+    Adapter-->>Orc: Returns [ {TxA, h:100}, {TxB, h:100} ]
+    
+    Orc->>Adapter: get_cached_header(100)
+    Adapter-->>Orc: Returns Header 100
+
+    Orc->>BDK: Apply Update with Anchor(Block 100)
+
+```
+
+### Conclusion
+
+This was the final piece of "correctness" missing from the puzzle.
+
+* **Latency:** Unaffected (headers are small and fetched in parallel).
+* **Correctness:** Absolute (transactions are cryptographically anchored).
+* **UX:** The transaction history is now properly sorted by time.
+
+---

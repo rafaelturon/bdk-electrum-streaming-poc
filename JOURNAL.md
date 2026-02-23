@@ -1775,3 +1775,358 @@ This was the final piece of "correctness" missing from the puzzle.
 * **UX:** The transaction history is now properly sorted by time.
 
 ---
+
+## 📅 2026-02-02 | Day 19: The Case of the Vanishing Change
+
+### Objective
+
+Now that the Proof-of-Concept is functional, I am shifting focus to documenting the "sharp edges" I encountered. My goal is to formalize these findings into a report for the BDK maintainers.
+
+| #	| Issue	| Impact | Scope | Fix Complexity |
+|---|---|---|---|---|
+| 1	|Silent missing change keychain | High | API | Low (require param or warn) |
+| 2	|Orphan txs after apply_update | Critical | API | Medium (return type w/ orphaned) |
+| 3	|Lookahead mismatch | Medium | Docs + API | Medium ("auto-reveal" behavior) |
+| 4	|seen_ats (HashMap x BTreeSet) | Low | API | Low (helper method: mark_seen) |
+| 5	|No streaming chain source pattern | Strategic | Ecosystem | High (new trait + reference impl) |
+
+Today, I analyzed a critical issue that plagued my early tests: **Silent Failure on Missing Change Descriptor**.
+
+### Analysis
+
+* **Symptom:** The wallet would report a 0 balance even though transactions were confirmed on-chain. It appeared to work but silently ignored all change outputs.
+* **Root Cause:** The `Wallet::load` and `Wallet::create` APIs accept the internal (change) descriptor as an `Option<String>`. If you pass `None`, the wallet simply stops tracking the internal keychain. Since almost every Bitcoin transaction produces change, the wallet sees funds leave but never sees them return.
+* **The Trap:** The compiler is happy with `None`, giving no warning that you have created a wallet that is mathematically guaranteed to report the wrong balance.
+
+### Suggestion
+
+It would be helpful if `Wallet::create` required both descriptors by default to prevent accidental data loss. For cases where a single descriptor is intentional, perhaps an explicit opt-in via a method like `Wallet::create_single_descriptor()` or a `log::warn!` would help guide new users.
+
+---
+
+## 📅 2026-02-03 | Day 20: The Ghost Transactions
+
+### Objective
+
+Continuing the ergonomics review, today I documented the second major pitfall: **Transactions Without Temporal Context**.
+
+### Analysis
+
+* **Symptom:** I would call `apply_update()`, get an `Ok(())` result, but the balance would remain zero. The transactions were in the graph but contributed to *no* balance bucket (confirmed, unconfirmed, or trusted pending).
+* **Root Cause:** BDK’s `TxGraph` strictness. Every transaction *must* have an anchor (block height/time) or a `seen_at` timestamp. Without one of these, the transaction is an "orphan" with no position in time, so BDK correctly excludes it from the balance.
+* **The Trap:** The `Ok(())` return value gives false confidence. You think you updated the wallet, but you effectively did nothing.
+
+### Suggestion
+
+It might improve the developer experience if `apply_update()` returned a richer result indicating how many transactions were actually incorporated into the balance versus those stored as orphans. Alternatively, a debug log for transactions missing context would aid troubleshooting. It could tell me: "I stored 5 transactions, but 5 of them were ignored for balance calculations".
+
+---
+
+## 📅 2026-02-04 | Day 21: The Lookahead Trap
+
+### Objective
+
+Today I documented the synchronization issue between the wallet's internal logic and my external streaming engine: **Lookahead Mismatch**.
+
+### Analysis
+
+* **Symptom:** The wallet would recognize transactions at index 5 but ignore transactions at index 25, even though I passed them in the update.
+* **Root Cause:** The BDK wallet defaults to a lookahead of ~20. My streaming tracker, designed for high-activity wallets, uses a lookahead of 50. When the stream discovers a transaction at index 21, `apply_update` stores it, but the wallet doesn't "see" it because it hasn't derived that address yet.
+* **The Trap:** The wallet has partial amnesia. It knows the transaction exists but doesn't know the output belongs to it.
+
+### Suggestion
+
+Improving the documentation around `Wallet::create` to highlight the importance of lookahead for custom chain sources would be valuable. A utility method like `wallet.ensure_lookahead(n)` could help external drivers keep the wallet's keychain in sync.
+
+---
+
+## 📅 2026-02-05 | Day 22: The Tuple Confusion
+
+### Objective
+
+A minor but annoying friction point I encountered repeatedly: **`seen_ats` Type Confusion**.
+
+### Analysis
+
+* **Symptom:** Every time I tried to insert a timestamp, I got a compilation error.
+* **Root Cause:** The `seen_ats` field is a `BTreeSet<(Txid, u64)>`, not a `HashMap<Txid, u64>`.
+* **The Friction:** The name `seen_ats` (plural) suggests a map of "where was this seen?", but the type requires constructing a tuple.
+
+
+### Suggestion
+
+A helper method like `tx_update.mark_seen(txid, timestamp)` would make this API much more intuitive and ergonomic.
+
+---
+
+## 📅 2026-02-06 | Day 23: The Architectural Gap
+
+### Objective
+
+The final and most strategic finding: **No Built-in Support for Streaming Chain Sources**.
+
+### Analysis
+
+* **Symptom:** There is no trait or guide for building a push-based wallet. I had to reverse-engineer the `Update` contract from `bdk_electrum` source code.
+* **Root Cause:** BDK is designed around a "Pull" model (`full_scan`, `sync`). The Electrum protocol supports "Push" (`subscribe`), but BDK has no abstraction for it.
+* **Impact:** This forces real-time apps (mobile, Lightning) into polling loops, wasting bandwidth and battery.
+
+
+### Suggestion
+
+I believe the ecosystem would benefit from a `StreamingChainSource` trait to standardize this pattern. I plan to offer `bdk_electrum_stream` as a reference implementation to help future developers.
+
+---
+
+## 📅 2026-02-07 | Day 24: Roadmap Phase 1 — Correctness
+
+### Objective
+
+With the findings documented, I have mapped out the evolution of this PoC into a crate.
+**Phase 1 is "Correctness".**
+
+### Plan
+
+* **Goal:** Phase 1 - Correctness (Current → v0.1.0)
+  - Streaming mode must match Polling mode exactly.
+
+* **Deliverables:**
+  - **[DONE]** Fix the balance bugs.
+  - **[DONE]** Implement Block Anchors.
+  - **[TODO]** Add integration test: run both polling and streaming (`sync_mode=both`) against the same testnet wallet and assert equal balances.
+  - **[TODO]** Add integration test: send a transaction via polling, observe the streaming engine detect it within 5 seconds.
+  - **[TODO]** Delete wallet_db.dat between runs to ensure clean state
+* **Success Criteria:**
+  - `cargo test --features integration` passes with a real Electrum server.
+  - asserts `balance_diff == 0`	
+
+### Architecture AS-IS
+
+```mermaid
+classDiagram
+    %% The Abstract Interface
+    class ElectrumApi {
+        <<interface>>
+        +register_script(ScriptBuf, sha256::Hash)
+        +poll_scripthash_changed() -> Option~sha256::Hash~
+        +fetch_history_txs(sha256::Hash) -> Option~Vec~HistoryTx~~
+        +request_history(sha256::Hash)
+        +get_cached_header(u32) -> Option~block::Header~
+    }
+
+    %% The Concrete Implementation
+    class ElectrumAdapter {
+        -shared_state: Arc~Mutex~SharedState~~
+        +new(url) ElectrumAdapter
+    }
+
+    %% The Orchestrator (Imperative Shell)
+    class SyncOrchestrator~K, C~ {
+        -engine: SyncEngine~K~
+        -client: C
+        -wallet: Arc~Mutex~StreamingWallet~~
+        -pending_initial_syncs: HashSet~sha256::Hash~
+        +run_forever()
+        +process_engine(EngineEvent)
+    }
+
+    %% The Pure Logic (Functional Core)
+    class SyncEngine~K~ {
+        -tracker: DerivedSpkTracker~K~
+        -state: SyncState
+        +handle_event(EngineEvent) -> Vec~EngineCommand~
+        +script_for_hash(sha256::Hash) -> Option~Script~
+    }
+
+    %% Domain Objects
+    class DerivedSpkTracker~K~ {
+        -lookahead: u32
+        -descriptors: BTreeMap
+        -derived_spks: BTreeMap
+        -derived_spks_rev: HashMap
+        +new(lookahead) DerivedSpkTracker
+    }
+
+    %% Wallet Implementation Details
+    class StreamingWallet {
+        <<type>>
+        PersistedWallet~Store~ChangeSet~~
+    }
+
+    class PersistedWallet~D~ {
+        <<BDK>>
+        +apply_update(Update) Result
+        +balance() Balance
+    }
+
+    %% Relationships
+    ElectrumAdapter ..|> ElectrumApi : Implements
+    
+    SyncOrchestrator --> ElectrumApi : Constraints C
+    SyncOrchestrator *-- SyncEngine : Owns
+    SyncOrchestrator --> StreamingWallet : Updates
+
+    SyncEngine *-- DerivedSpkTracker : Owns
+
+    %% Wallet Composition Relationships
+    StreamingWallet --|> PersistedWallet : is alias of
+
+
+```
+---
+
+## 📅 2026-02-08 | Day 25: Roadmap Phase 2 — Reliability
+
+### Objective
+
+Moving from "it works" to "it stays working". **Phase 2 is "Reliability".** 
+
+This section outlines the path from the current PoC (bdk-electrum-streaming-poc) to a production-quality crate (bdk_electrum_stream) that could be adopted as an external chain source in the BDK ecosystem, with a usage example in the official BDK repository.
+| Property | Property |
+|---|---|
+| Crate name | bdk_electrum_stream | 
+| Repository | github.com/rafaelturon/bdk-electrum-stream |
+| Minimum BDK version | bdk_wallet 1.x, bdk_chain (latest) |
+| Rust edition | 2021, MSRV aligned with BDK (1.85.0) |
+| License |	MIT / Apache-2.0 (matching BDK) |
+| Async runtime	| tokio (with optional runtime-agnostic feature) |
+
+
+### Plan
+
+* **Goal:** Phase 2 - Reliability (v0.1.0 → v0.2.0)
+  - Handle real-world network chaos.
+
+* **Deliverables:**
+  - Replace `thread::sleep` polling with `tokio::sync::mpsc` channels.
+  - Implement reconnection logic in ElectrumAdapter: exponential backoff, re-subscribe on reconnect.
+  - Replace all unwrap()/expect() in non-test code with proper error propagation (anyhow::Result or custom error enum).
+  - Handle blockchain reorgs: detect when a previously-anchored transaction disappears and update the wallet accordingly.
+  - Graceful Shutdown (Ctrl+C handling) with tokio signal handler.
+  - Persist wallet state on each sync round (call wallet.persist() after apply_update).
+
+* **Success Criteria:** 
+  - Kill the Electrum server mid-sync, and the client reconnects and resumes without data loss.
+  - Run for 24 hours on testnet without panic or memory growth.
+
+
+---
+
+## 📅 2026-02-09 | Day 26: Roadmap Phase 3 — Crate Extraction
+
+### Objective
+The code currently lives inside a monolithic `main.rs` binary. It needs to be a library. **Phase 3 is "Crate Extraction".**
+
+### Plan
+
+* **Goal:** Phase 3 - Crate Extraction (v0.2.0 → v0.3.0)
+  - Create `bdk_electrum_stream`.
+
+* **Deliverables:**
+  - Split into a workspace: `lib` + `example_bin`.
+  - Define the Public API with three entry points:
+    1. `stream_full_scan` (One-shot).
+    2. `stream_sync` (Background channel).
+    3. `SyncEngine` (Low-level access).
+
+
+* **Success Criteria:**
+  - A developer can integrate the crate in under 30 minutes by reading the docs.
+
+
+---
+
+## 📅 2026-02-10 | Day 27: Roadmap Phase 4 — Ecosystem Integration
+
+### Objective
+
+**Phase 4 is the destination: "Ecosystem Integration".**
+
+### Plan
+
+* **Goal:** Phase 4 - BDK Ecosystem Integration (v0.3.0 → v1.0.0)
+  - Get accepted into the official BDK repository.
+
+* **Deliverables:**
+  - Submit a PR adding `examples/example_electrum_streaming` to the BDK repo.
+  - Align MSRV (1.85.0) and code style with BDK conventions.
+  - Add benchmarks comparing polling vs. streaming.
+
+* **Timeline:**
+  - This entire roadmap is estimated to take ~13 weeks , finishing around June 2026.
+
+### Architecture TO-BE
+
+```mermaid
+classDiagram
+    %% The Abstract Interface
+    class SyncProvider {
+        <<interface>>
+        +register_script(ScriptBuf, sha256::Hash)
+        +poll_scripthash_changed() -> Option~sha256::Hash~
+        +fetch_history_txs(sha256::Hash) -> Option~Vec~HistoryTx~~
+        +request_history(sha256::Hash)
+        +get_cached_header(u32) -> Option~block::Header~
+    }
+
+    %% The Concrete Implementation
+    class ElectrumClient {
+        -shared_state: Arc~Mutex~SharedState~~
+        +new(url) ElectrumClient
+    }
+
+    %% The Orchestrator (Imperative Shell)
+    class StreamingRuntime~K, C~ {
+        -engine: StreamingEngine~K~
+        -client: C
+        -wallet: Arc~Mutex~StreamingWallet~~
+        -pending_initial_syncs: HashSet~sha256::Hash~
+        +run_forever()
+        +process_engine(EngineEvent)
+    }
+
+    %% The Pure Logic (Functional Core)
+    class StreamingEngine~K~ {
+        -tracker: AddressTracker~K~
+        -state: SyncState
+        +handle_event(EngineEvent) -> Vec~EngineCommand~
+        +script_for_hash(sha256::Hash) -> Option~Script~
+    }
+
+    %% Domain Objects
+    class AddressTracker~K~ {
+        -lookahead: u32
+        -descriptors: BTreeMap
+        -derived_spks: BTreeMap
+        -derived_spks_rev: HashMap
+        +new(lookahead) AddressTracker
+    }
+
+    %% Wallet Implementation Details
+    class StreamingWallet {
+        <<type>>
+        PersistedWallet~Store~ChangeSet~~
+        +new(T) Mutex~T~
+    }
+
+    class PersistedWallet~D~ {
+        <<BDK>>
+        +apply_update(Update) Result
+        +balance() Balance
+    }
+
+    %% Relationships
+    ElectrumClient ..|> SyncProvider : Implements
+    
+    StreamingRuntime --> SyncProvider : Constraints C
+    StreamingRuntime *-- StreamingEngine : Owns
+    StreamingRuntime --> StreamingWallet : Updates
+
+    StreamingEngine *-- AddressTracker : Owns
+
+    %% Wallet Composition Relationships
+    StreamingWallet --|> PersistedWallet : is alias of
+
+
+```
+---

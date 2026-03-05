@@ -18,13 +18,102 @@ Mastering **Async Rust** and **Streaming Architectures** (via this Electrum impl
 
 ## 🧭 Project Context
 
-This project is part of the **Bitcoin Dev Launchpad**. It represents the "Production Phase" of my study on Bitcoin Wallets.
+This project is part of the **Bitcoin Dev Launchpad Residency** from [Vinteum](https://vinteum.org/3-years-EN). It represents the "Production Phase" of my study on Bitcoin Wallets.
 
 * **Phase 1 ([Rust Bitcoin Wallet Evolution](https://github.com/rafaelturon/rust-bitcoin-wallet-evolution)):** Bare-metal wallet implementation (Manual UTXO management, SegWit v0, byte-level transaction construction). *Kept private to respect course integrity.*
-* **Phase 2 ([BDK Electrum Streaming Client PoC](JOURNAL.md)):** Async networking and integration with the Bitcoin Dev Kit (BDK) ecosystem.
+* **Phase 2 ([BDK Electrum Streaming Client Poc (see journal)](JOURNAL.md)):** Async networking and integration with the Bitcoin Dev Kit (BDK) ecosystem.
 
 **Goal:**
 Enable real-time balance updates and transaction notifications for BDK-based wallets by implementing the `blockchain.scripthash.subscribe` method from the Electrum protocol.
+
+## 🏗️ Architecture TO-BE
+
+```mermaid
+classDiagram
+    %% The Abstract Interface
+    class SyncProvider {
+        <<interface>>
+        +register_script(ScriptBuf, sha256::Hash)
+        +poll_scripthash_changed() -> Option~sha256::Hash~
+        +fetch_history_txs(sha256::Hash) -> Option~Vec~HistoryTx~~
+        +request_history(sha256::Hash)
+        +get_cached_header(u32) -> Option~block::Header~
+    }
+
+    %% The Concrete Implementation
+    class ElectrumClient {
+        -shared_state: Arc~Mutex~SharedState~~
+        +new(url) ElectrumClient
+    }
+
+    %% The Orchestrator (Imperative Shell)
+    class StreamingRuntime~K, C~ {
+        -engine: StreamingEngine~K~
+        -client: C
+        -wallet: Arc~Mutex~StreamingWallet~~
+        -pending_initial_syncs: HashSet~sha256::Hash~
+        +run_forever()
+        +process_engine(EngineEvent)
+    }
+
+    %% The Pure Logic (Functional Core)
+    class StreamingEngine~K~ {
+        -tracker: AddressTracker~K~
+        -state: SyncState
+        +handle_event(EngineEvent) -> Vec~EngineCommand~
+        +script_for_hash(sha256::Hash) -> Option~Script~
+    }
+
+    %% Domain Objects
+    class AddressTracker~K~ {
+        -lookahead: u32
+        -descriptors: BTreeMap
+        -derived_spks: BTreeMap
+        -derived_spks_rev: HashMap
+        +new(lookahead) AddressTracker
+    }
+
+    %% Wallet Implementation Details
+    class StreamingWallet {
+        <<type>>
+        PersistedWallet~Store~ChangeSet~~
+        +new(T) Mutex~T~
+    }
+
+    class PersistedWallet~D~ {
+        <<BDK>>
+        +apply_update(Update) Result
+        +balance() Balance
+    }
+
+    %% Relationships
+    ElectrumClient ..|> SyncProvider : Implements
+    
+    StreamingRuntime --> SyncProvider : Constraints C
+    StreamingRuntime *-- StreamingEngine : Owns
+    StreamingRuntime --> StreamingWallet : Updates
+
+    StreamingEngine *-- AddressTracker : Owns
+
+    %% Wallet Composition Relationships
+    StreamingWallet --|> PersistedWallet : is alias of
+```
+
+## 📋 Next Activities
+
+The upcoming execution steps are divided across different repositories:
+
+### 1. This Repository (`bdk-electrum-streaming-poc`)
+* **Documentation & Review:** Update `JOURNAL.md` documenting the prior art discovered to reframe issues (e.g., `create_single()` opt-in and intentional `TxUpdate` temporal context).
+* **Community Outreach:** Post on the BDK Discord acknowledging PR #1390, referencing the Wizardsardine audit (Q4 2024), and sharing our streaming PoC and findings.
+* **Coordination Hold:** Wait for feedback from the maintainers prior to submitting any PRs to ensure alignment.
+
+### 2. Upstream BDK (`bitcoindevkit/bdk` & `bitcoindevkit/bdk_wallet`)
+* **Documentation Issue (bdk_wallet):** File an issue to document `TxUpdate` temporal context requirements (reinforcing the Wizardsardine audit recommendation with real-world developer evidence).
+* **Architecture Discussion (bdk):** Open a discussion regarding "Streaming/push-based chain sources: interest and coordination", referencing issue #527 and evanlinjin's experiment, before investing further in a standalone crate.
+
+### 3. Book of BDK (`bitcoindevkit/book-of-bdk`)
+* **Cookbook Issue:** Propose a new "Building a Custom Chain Source" cookbook page that highlights how to handle temporal context requirements, lookahead alignment, and the `seen_ats` `BTreeSet` format.
 
 ## 🤖 Development Protocol
 

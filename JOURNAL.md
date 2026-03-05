@@ -2130,3 +2130,40 @@ classDiagram
 
 ```
 ---
+
+## 📅 2026-03-05 | Day 28: Review of Prior Art and Ecosystem Integration Strategy
+
+### Objective
+
+Today's focus was on thoroughly reviewing existing BDK issues, PRs, and audit reports to ensure our streaming PoC aligns with the ecosystem and to plan our upstream contribution strategy. It's crucial to understand the prior art before submitting any PRs or issues.
+
+### Prior Art Discovered
+
+I've identified three key layers of prior art that we must acknowledge to maintain credibility in our contributions:
+
+1. **Change Descriptor Requirement (Independently Validated)**
+   - *Finding*: Silent failure on missing change descriptor.
+   - *Status*: **FIXED** upstream in PR #1390 (Jun 2024). `Wallet::create()` now requires both descriptors, with `Wallet::create_single()` for explicit opt-in.
+   - *Action*: I independently validated this same design. Moving forward, I will acknowledge PR #1390 rather than filing any new issues.
+
+2. **TxUpdate Temporal Context Contract (Reinforcing Audit Recommendation)**
+   - *Finding*: Transactions without temporal context (`anchors` or `seen_ats`) are stored in the graph but do not affect the balance. This silent failure is a major pitfall for custom chain source authors.
+   - *Status*: Known documentation gap. The Wizardsardine audit (Oct 2024) flagged that `seen_ats` is not populated by chain sources and docs should mention this. The behavior is **intentional by design** — the canonicalization algorithm cannot determine chain position without anchors or `seen_ats`. Over in `bdk_esplora`, `insert_anchor_or_seen_at_from_status()` handles this.
+   - *Action*: I will file this as a documentation request on `bdk_wallet` to reinforce the Wizardsardine audit recommendation with my concrete developer evidence from building this PoC.
+
+3. **Streaming Chain Source Pattern**
+   - *Finding*: There's no formalized pattern or trait for push-based/streaming chain sources, though there is prior interest (Issue #527 from 2022 by LLFourn) and @evanlinjin's streaming experiment.
+   - *Action*: I will open a discussion on the `bdk` repo to coordinate with the community before investing further in a standalone `bdk_electrum_stream` crate.
+
+### Secondary Findings
+
+* **Lookahead mismatch with external trackers**: This is partially documented but a significant pitfall for custom chain sources. Will include in a docs contribution.
+* **`seen_ats` collection type**: `TxUpdate::seen_ats` is a `BTreeSet<(Txid, u64)>`, requiring `.insert((txid, timestamp))`. A minor ergonomic trap to document.
+* **`evicted_at` / `last_evicted` timestamps**: Added in PR #1839. This expands the temporal context model and emphasizes the need for documentation.
+
+### Next Steps & Execution Plan
+
+1. **Docs Issue on `bdk_wallet`**: File an issue reinforcing the Wizardsardine audit recommendation on TxUpdate temporal context.
+2. **Docs Issue on `book-of-bdk`**: Propose a "Building a Custom Chain Source" cookbook page covering lookahead, temporal context, and `seen_ats`.
+3. **Discussion on `bdk`**: Open a discussion referencing Issue #527 and evanlinjin's experiment to gauge interest in a streaming crate.
+4. **Discord Post**: Share our findings, acknowledge PR #1390, and reference the audit to get community feedback. Maintain a 48-72 hour coordination hold before opening any PRs to ensure alignment.
